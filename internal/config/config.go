@@ -167,7 +167,7 @@ func applyEnv(cfg *Config) error {
 }
 
 // ApplyCLIOverrides applies command-line flag overrides onto the config.
-func (cfg *Config) ApplyCLIOverrides(serverPort, webPort int, tlsEnabled *bool, tunnelType, boreBinary, frpServer, proxyURL, bindInterface string, noProxy bool) {
+func (cfg *Config) ApplyCLIOverrides(serverPort, webPort int, tlsEnabled *bool, tunnelType, boreBinary, frpServer, proxyURL, bindInterface string, noProxy *bool) {
 	if serverPort > 0 {
 		cfg.Server.Port = serverPort
 	}
@@ -192,7 +192,7 @@ func (cfg *Config) ApplyCLIOverrides(serverPort, webPort int, tlsEnabled *bool, 
 	if bindInterface != "" {
 		cfg.Network.BindInterface = bindInterface
 	}
-	if noProxy {
-		cfg.Network.NoProxy = true
+	if noProxy != nil {
+		cfg.Network.NoProxy = *noProxy
 	}
 }

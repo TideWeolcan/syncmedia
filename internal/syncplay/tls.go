@@ -67,7 +67,7 @@ func generateSM2Cert() (*gmtls.Certificate, error) {
 		ExtKeyUsage:        []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		IsCA:               false,
-		DNSNames:           []string{"localhost", "*"},
+		DNSNames:           []string{"localhost"},
 		SignatureAlgorithm: smx509.SM2WithSM3,
 	}
 

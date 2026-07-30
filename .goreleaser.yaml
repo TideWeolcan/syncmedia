@@ -33,6 +33,8 @@ archives:
     files:
       - config.yaml
       - README.md
+      - start.sh
+      - stop.sh
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

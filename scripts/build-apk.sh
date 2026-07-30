@@ -40,8 +40,8 @@ echo "  ✓ Java classes"
 # 3. Dex 编译
 echo "[3/8] Dex 编译..."
 mkdir -p "$BUILD_DIR/dex"
-"$BUILD_TOOLS/d8" --min-api 29 --lib "$PLATFORM_JAR" --output "$BUILD_DIR/dex" \
-    $(find "$BUILD_DIR/classes" -name "*.class") 2>&1
+find "$BUILD_DIR/classes" -name "*.class" -print0 | xargs -0 \
+    "$BUILD_TOOLS/d8" --min-api 29 --lib "$PLATFORM_JAR" --output "$BUILD_DIR/dex" 2>&1
 echo "  ✓ classes.dex"
 
 # 4. 准备资源目录

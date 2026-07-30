@@ -123,11 +123,13 @@ func (ws *WebServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "已保存，正在重启..."})
 		return
 	}
+	w.Header().Set("Allow", "GET, POST")
 	http.Error(w, "方法不允许", 405)
 }
 
 func (ws *WebServer) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
+		w.Header().Set("Allow", "POST")
 		http.Error(w, "方法不允许", 405)
 		return
 	}

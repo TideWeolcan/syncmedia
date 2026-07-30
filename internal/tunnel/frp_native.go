@@ -60,7 +60,7 @@ func NewFRPNativeClient(server string, serverPort int, token string, remotePort 
 		serverPort:    serverPort,
 		token:         token,
 		remotePort:    remotePort,
-		proxyName:     fmt.Sprintf("syncmedia-%d", time.Now().Unix()%100000),
+		proxyName:     fmt.Sprintf("syncmedia-%d-%d", os.Getpid(), time.Now().UnixNano()%100000),
 		logger:        logger,
 		pollInterval:  200 * time.Millisecond,
 		degradedAfter: 15 * time.Second,

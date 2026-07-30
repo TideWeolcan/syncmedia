@@ -1,5 +1,7 @@
 # SyncMedia
 
+[![CI](https://github.com/TideWeolcan/syncmedia/actions/workflows/ci.yml/badge.svg)](https://github.com/TideWeolcan/syncmedia/actions/workflows/ci.yml)
+
 Syncplay 兼容的媒体同步服务器，内置隧道穿透（bore / frp）与嵌入式 WebUI，纯 Go 实现。
 
 配合 [Kazumi](https://github.com/Kazumi-Team/Kazumi) 等支持 Syncplay 协议的客户端使用，可实现多人远程同步观影。
@@ -171,3 +173,21 @@ go vet ./...
 ## 许可证
 
 MIT
+
+## 分支策略
+
+- **main**：稳定发布分支，仅接受经过 CI 验证的合并
+- **develop**：活跃开发分支，日常开发在此进行
+
+## 贡献
+
+1. Fork 本仓库
+2. 基于 `develop` 分支创建功能分支
+3. 提交 PR 到 `develop`（commit 消息使用英文，格式：`type: description`）
+4. 等待 CI 通过后合并
+
+## CI / 故障排查
+
+CI 流水线定义于 `.github/workflows/ci.yml`，包含 test、lint、vulncheck、build、build-apk、build-ksu、release 七个 job。
+
+遇到 CI 失败请参阅 [故障排除指南](docs/CI-TROUBLESHOOTING.md)。

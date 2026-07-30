@@ -27,6 +27,7 @@ type Manager struct {
     srv        *syncplay.Server
     tunnelMgr  *tunnel.Manager
     webSrv     *WebServer
+    logger     *log.Logger
     mu         sync.RWMutex     // 保护 Status 读
     restartMu  sync.Mutex       // 串行化 Restart
 }
@@ -84,10 +85,10 @@ TCP 连接
 | DefaultPort | 8999 | 默认监听端口 |
 | ProtocolTimeout | 12.5s | 连接超时 |
 | StateInterval | 1s | 状态广播间隔 |
-| MaxUsernameLen | 16 | 用户名上限 |
-| MaxRoomNameLen | 35 | 房间名上限 |
-| MaxFilenameLen | 250 | 文件名上限 |
-| MaxChatLen | 150 | 聊天消息上限 |
+| MaxUsernameLength | 16 | 用户名上限 |
+| MaxRoomNameLength | 35 | 房间名上限 |
+| MaxFilenameLength | 250 | 文件名上限 |
+| MaxChatLength | 150 | 聊天消息上限 |
 
 ### Tunnel（`internal/tunnel/`）
 
@@ -111,7 +112,7 @@ type Tunnel interface {
     Stop() error
     Name() string
     State() State
-    PublicAddr() string  // 实时地址，断线后返回空
+    PublicAddr() string  // 仅 State() == StateReady 时非空
 }
 ```
 
@@ -138,8 +139,10 @@ type Tunnel interface {
 
 ```go
 type Manager struct {
+    mu      sync.Mutex
     tunnels []Tunnel   // 按注册顺序
     active  Tunnel     // 当前活跃隧道
+    logger  *log.Logger
 }
 ```
 
@@ -204,7 +207,9 @@ zipalign → apksigner (debug.keystore)
 | lint | 同上 | golangci-lint |
 | vulncheck | 同上 | govulncheck |
 | build | 同上 | 多平台构建 + binary smoke (`syncmedia version`) |
-| release | tags `v*` | GoReleaser 全自动发布 |
+| build-apk | 同上（非 tag） | APK 构建 + verify-apk.sh 静态检查 |
+| build-ksu | 同上（非 tag） | KSU 模块构建 + zip 校验 |
+| release | tags `v*` | GoReleaser + APK + KSU 模块全自动发布 |
 
 Windows 步骤使用 PowerShell 语法设置环境变量。
 

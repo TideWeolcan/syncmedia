@@ -353,7 +353,11 @@ func (c *Client) sendHelloResponse(clientVersion string) {
 		},
 	}
 
-	raw, _ := json.Marshal(helloData)
+	raw, err := json.Marshal(helloData)
+	if err != nil {
+		log.Printf("序列化 Hello 消息失败: %v", err)
+		return
+	}
 	c.writeRaw(raw)
 }
 

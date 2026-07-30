@@ -1,3 +1,8 @@
 #!/bin/sh
 # SyncMedia 停止脚本
-kill $(pgrep -f "syncmedia start") 2>/dev/null && echo "已停止" || echo "未在运行"
+PID=$(pidof syncmedia 2>/dev/null) || PID=$(pgrep -x syncmedia 2>/dev/null)
+if [ -n "$PID" ]; then
+    kill "$PID" && echo "已停止 (PID $PID)"
+else
+    echo "未在运行"
+fi

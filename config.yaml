@@ -24,3 +24,11 @@ tunnel:
 web:
   port: 8080              # WebUI 端口
   enabled: true           # 是否启用 WebUI
+  bind: "127.0.0.1"       # 绑定地址（默认仅本机；设为 0.0.0.0 需配合 token）
+  token: ""               # 访问令牌（非回环绑定时必填）
+
+# 网络设置
+network:
+  proxy_url: ""           # HTTP/SOCKS5 代理地址 (如 socks5://127.0.0.1:1080)
+  no_proxy: false         # 绕过系统代理（清除 HTTP_PROXY 等环境变量）
+  bind_interface: ""      # 绑定网卡绕过 VPN (如 wlan0，需 root/CAP_NET_RAW)

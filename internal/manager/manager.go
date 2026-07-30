@@ -25,10 +25,11 @@ type Manager struct {
 	webSrv    *WebServer
 	logger    *log.Logger
 
-	mu         sync.RWMutex
-	publicAddr string // Start 时的一次性快照，仅供启动日志/printSummary；Status 走 tunnelMgr 实时值
-	tunnelName string // 同上
-	startTime  time.Time
+	mu             sync.RWMutex
+	publicAddr     string // Start 时的一次性快照，仅供启动日志/printSummary；Status 走 tunnelMgr 实时值
+	tunnelName     string // 同上
+	startTime      time.Time
+	lastRestartErr error  // 最近一次 Restart 的错误（nil 表示成功或未重启过）
 
 	cancel    context.CancelFunc // 取消当前 Start 的 context
 	restartMu sync.Mutex         // 保证同一时刻仅一个 Restart 执行
@@ -180,23 +181,29 @@ func (m *Manager) Status() Status {
 		publicAddr = m.tunnelMgr.PublicAddr()
 		tunnelName = m.tunnelMgr.ActiveTunnelName()
 	}
+	var restartErr string
+	if m.lastRestartErr != nil {
+		restartErr = m.lastRestartErr.Error()
+	}
 	return Status{
-		PublicAddr: publicAddr,
-		TunnelType: tunnelName,
-		ServerPort: m.cfg.Server.Port,
-		TLSEnabled: m.cfg.Server.TLS,
-		WebPort:    m.cfg.Web.Port,
-		Uptime:     time.Since(m.startTime).Round(time.Second).String(),
+		PublicAddr:   publicAddr,
+		TunnelType:  tunnelName,
+		ServerPort:  m.cfg.Server.Port,
+		TLSEnabled:  m.cfg.Server.TLS,
+		WebPort:     m.cfg.Web.Port,
+		Uptime:      time.Since(m.startTime).Round(time.Second).String(),
+		RestartError: restartErr,
 	}
 }
 
 type Status struct {
-	PublicAddr string `json:"publicAddr"`
-	TunnelType string `json:"tunnelType"`
-	ServerPort int    `json:"serverPort"`
-	TLSEnabled bool   `json:"tlsEnabled"`
-	WebPort    int    `json:"webPort"`
-	Uptime     string `json:"uptime"`
+	PublicAddr   string `json:"publicAddr"`
+	TunnelType   string `json:"tunnelType"`
+	ServerPort   int    `json:"serverPort"`
+	TLSEnabled   bool   `json:"tlsEnabled"`
+	WebPort      int    `json:"webPort"`
+	Uptime       string `json:"uptime"`
+	RestartError string `json:"restartError,omitempty"`
 }
 
 func (m *Manager) printSummary() {
@@ -296,7 +303,7 @@ func (m *Manager) Restart() {
 	m.logger.Printf("正在重启...")
 	m.Stop()
 
-	// 重新设置 NoProxy 环境
+	// 根据 NoProxy 配置管理代理环境变量
 	if m.cfg.Network.NoProxy {
 		os.Unsetenv("HTTP_PROXY")
 		os.Unsetenv("HTTPS_PROXY")
@@ -304,6 +311,10 @@ func (m *Manager) Restart() {
 		os.Unsetenv("http_proxy")
 		os.Unsetenv("https_proxy")
 		os.Unsetenv("all_proxy")
+	} else if m.cfg.Network.ProxyURL != "" {
+		// NoProxy 未启用且配置了代理：确保环境变量能被 net/http 的 ProxyFromEnvironment 读取
+		os.Setenv("ALL_PROXY", m.cfg.Network.ProxyURL)
+		os.Setenv("all_proxy", m.cfg.Network.ProxyURL)
 	}
 
 	m.srv = nil
@@ -315,7 +326,11 @@ func (m *Manager) Restart() {
 	m.cancel = cancel
 	m.mu.Unlock()
 	go func() {
-		if err := m.Start(ctx); err != nil {
+		err := m.Start(ctx)
+		m.mu.Lock()
+		m.lastRestartErr = err
+		m.mu.Unlock()
+		if err != nil {
 			m.logger.Printf("重启失败: %v", err)
 		}
 	}()

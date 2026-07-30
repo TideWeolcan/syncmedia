@@ -13,7 +13,7 @@ SyncMedia 是一个 Syncplay 1.7.5 协议兼容的媒体同步服务器，纯 Go
 - **TLS**：国密 SM2 + ECDSA 双证书，内存自签名（`github.com/tjfoc/gmsm`）
 - **隧道**：bore 原生 Go 实现 / frp（`github.com/fatedier/frp` Go 库）
 - **配置**：`gopkg.in/yaml.v3`（strict mode）
-- **CI**：GitHub Actions（test/lint/vulncheck/build/release）
+- **CI**：GitHub Actions（test/lint/vulncheck/build/build-apk/build-ksu/release）
 - **发布**：GoReleaser
 
 ## 目录结构
@@ -29,7 +29,7 @@ pkg/version/            版本信息（ldflags 注入：Version/Commit/Date）
 android/                Android APK 源码（Java: MainActivity + SyncService）
 kernelsu/               KernelSU/Magisk 模块（module.prop + service.sh）
 scripts/                构建与验证脚本
-docs/                   技术文档（TECHNICAL.md）
+docs/                   技术文档（TECHNICAL.md、CI-TROUBLESHOOTING.md）
 ```
 
 ## 构建命令
@@ -93,7 +93,9 @@ go vet ./...
 | lint | golangci-lint |
 | vulncheck | govulncheck |
 | build | 多平台构建 + `syncmedia version` smoke test |
-| release | GoReleaser（仅 tag 触发） |
+| build-apk | APK 构建验证（非 tag 时触发） |
+| build-ksu | KSU 模块构建验证（非 tag 时触发） |
+| release | GoReleaser + APK + KSU 模块（仅 tag 触发） |
 
 ## 配置系统
 

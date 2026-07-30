@@ -82,7 +82,11 @@ func runStart(args []string) {
 		t := false
 		tlsFlag = &t
 	}
-	cfg.ApplyCLIOverrides(serverPort, webPort, tlsFlag, tunnelType, boreBinary, frpServer, proxyURL, bindInterface, noProxy)
+	var noProxyFlag *bool
+	if noProxy {
+		noProxyFlag = &noProxy
+	}
+	cfg.ApplyCLIOverrides(serverPort, webPort, tlsFlag, tunnelType, boreBinary, frpServer, proxyURL, bindInterface, noProxyFlag)
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
