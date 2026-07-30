@@ -1,0 +1,48 @@
+# .goreleaser.yaml
+project_name: syncmedia
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: syncmedia
+    main: ./cmd/syncmedia
+    binary: syncmedia
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/TideWeolcan/syncmedia/pkg/version.Version={{.Version}}
+      - -X github.com/TideWeolcan/syncmedia/pkg/version.Commit={{.Commit}}
+      - -X github.com/TideWeolcan/syncmedia/pkg/version.Date={{.Date}}
+
+archives:
+  - id: syncmedia
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - config.yaml
+      - README.md
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch

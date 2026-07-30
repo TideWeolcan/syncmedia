@@ -1,0 +1,6 @@
+id=syncmedia
+name=SyncMedia
+version=v2.0.0
+versionCode=1
+author=syncmedia
+description=Syncplay 服务器 + bore/frp 隧道，开机自启同步观影服务。启动后访问 http://127.0.0.1:8080 查看公共地址。

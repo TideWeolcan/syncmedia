@@ -1,0 +1,26 @@
+# SyncMedia 配置文件
+# 优先级：默认值 < config.yaml < 环境变量 (SYNCMEDIA_*) < 命令行参数
+
+# syncplay 服务器设置
+server:
+  port: 8999              # 服务器监听端口
+  tls: true               # 启用 STARTTLS（Kazumi 需要，内存生成自签名证书）
+  password: ""            # 可选密码保护（留空=无密码）
+
+# 隧道设置
+tunnel:
+  type: bore              # bore | frp | none
+  bore:
+    relay: "bore.pub"     # bore 公共中继地址
+    binary: ""            # bore 二进制路径（留空=从 PATH 搜索）
+  frp:
+    server: ""            # frp 公共服务器地址
+    port: 7000            # frp 服务器端口
+    token: ""             # frp 认证 token（可选）
+    remote_port: 0        # 远程端口（0=自动分配）
+    binary: ""            # frpc 二进制路径
+
+# WebUI 设置
+web:
+  port: 8080              # WebUI 端口
+  enabled: true           # 是否启用 WebUI

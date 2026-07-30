@@ -1,0 +1,30 @@
+# 构建产物
+/syncmedia
+syncmedia.apk
+syncmedia.apk.idsig
+syncmedia-ksu.zip
+dist/
+
+# Android 构建缓存
+android/build/
+
+# 运行时目录
+.syncmedia/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go
+vendor/
+
+# 证书（内存生成，不落盘）
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
