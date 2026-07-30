@@ -77,11 +77,12 @@ func (m *Manager) Start(ctx context.Context) error {
 		GMConfig: gmConfig,
 		Logger:   m.logger,
 	}
-	m.srv = syncplay.NewServer(srvConfig)
-	if err := m.srv.Listen(m.cfg.Server.Port); err != nil {
+	srv := syncplay.NewServer(srvConfig)
+	if err := srv.Listen(m.cfg.Server.Port); err != nil {
 		return fmt.Errorf("syncplay 监听: %w", err)
 	}
-	go m.srv.Serve()
+	m.srv = srv
+	go srv.Serve()
 	m.logger.Printf("syncplay 服务器启动，端口 %d", m.cfg.Server.Port)
 
 	// Wait for syncplay to be ready
