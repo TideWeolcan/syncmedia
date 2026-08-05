@@ -274,12 +274,6 @@ func newWatcher(name string, client *Client) *Watcher {
 	}
 }
 
-func (w *Watcher) getName() string      { return w.name }
-func (w *Watcher) getRoom() *Room       { return w.room }
-func (w *Watcher) getFile() *FileInfo   { return w.file }
-func (w *Watcher) getVersion() string   { return w.version }
-func (w *Watcher) isReady() *bool       { return w.ready }
-
 func (w *Watcher) setFile(f *FileInfo) {
 	if f != nil && f.Name != "" {
 		f.Name = truncateText(f.Name, MaxFilenameLength)

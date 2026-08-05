@@ -1,0 +1,22 @@
+version: "2"
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - "(net.Conn).Close"
+        - "(net.Conn).SetDeadline"
+        - "(net.Conn).SetReadDeadline"
+        - "(net.Conn).SetWriteDeadline"
+        - "(net.Listener).Close"
+        - "(io.ReadCloser).Close"
+        - "(*http.Server).Close"
+        - "(*syncplay.Server).Close"
+        - "(*tunnel.Manager).Stop"
+        - "(http.ResponseWriter).Write"
+        - "io.Copy"
+        - "os.Setenv"
+        - "os.Unsetenv"
+        - "fmt.Fprintf"
+        - "(*flag.FlagSet).Parse"
+        - "(*encoding/json.Encoder).Encode"
+        - "syscall.SetsockoptString"

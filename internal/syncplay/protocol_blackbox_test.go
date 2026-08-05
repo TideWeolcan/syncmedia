@@ -45,9 +45,9 @@ func newTestEnv(t *testing.T) *testEnv {
 
 func (e *testEnv) teardown() {
 	for _, c := range e.conns {
-		c.Close()
+		_ = c.Close()
 	}
-	e.srv.Close()
+	_ = e.srv.Close()
 }
 
 func (e *testEnv) dial() *testClient {

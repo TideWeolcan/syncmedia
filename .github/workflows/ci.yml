@@ -65,7 +65,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # 固定版本：latest 可能由低于 go.mod 目标 (go1.25.0) 的 Go 构建，
+          # 触发 "used to build golangci-lint is lower than the targeted Go version"。
+          version: v2.12.2
           args: --timeout=10m
 
   vulncheck:

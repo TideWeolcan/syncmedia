@@ -55,7 +55,7 @@ func TestCloseBoundedWithActiveClient(t *testing.T) {
 
 	closeDone := make(chan struct{})
 	go func() {
-		env.srv.Close()
+		_ = env.srv.Close()
 		close(closeDone)
 	}()
 
