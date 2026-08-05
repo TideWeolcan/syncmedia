@@ -44,7 +44,9 @@ func NewManager(cfg *config.Config, logger *log.Logger) *Manager {
 
 // Start launches all components and blocks until ctx is cancelled.
 func (m *Manager) Start(ctx context.Context) error {
+	m.mu.Lock()
 	m.startTime = time.Now()
+	m.mu.Unlock()
 
 	// 0. 先构造 WebServer（校验绑定/认证配置），避免坏配置下 syncplay 已监听造成泄漏
 	var webSrv *WebServer
@@ -81,7 +83,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := srv.Listen(m.cfg.Server.Port); err != nil {
 		return fmt.Errorf("syncplay 监听: %w", err)
 	}
+	m.mu.Lock()
 	m.srv = srv
+	m.mu.Unlock()
 	go srv.Serve()
 	m.logger.Printf("syncplay 服务器启动，端口 %d", m.cfg.Server.Port)
 
@@ -92,15 +96,16 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// 3. Start tunnel
 	if m.cfg.Tunnel.Type != "none" {
-		m.tunnelMgr = tunnel.NewManager(m.logger)
-		m.setupTunnels()
+		tunnelMgr := tunnel.NewManager(m.logger)
+		m.setupTunnels(tunnelMgr)
 
-		if err := m.tunnelMgr.Start(m.cfg.Server.Port); err != nil {
+		if err := tunnelMgr.Start(m.cfg.Server.Port); err != nil {
 			m.logger.Printf("警告: 所有隧道均失败: %v（服务器仍在本地运行）", err)
 		} else {
 			m.mu.Lock()
-			m.publicAddr = m.tunnelMgr.PublicAddr()
-			m.tunnelName = m.tunnelMgr.ActiveTunnelName()
+			m.tunnelMgr = tunnelMgr
+			m.publicAddr = tunnelMgr.PublicAddr()
+			m.tunnelName = tunnelMgr.ActiveTunnelName()
 			m.mu.Unlock()
 			m.logger.Printf("隧道已激活: %s → %s", m.tunnelName, m.publicAddr)
 		}
@@ -108,9 +113,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// 4. Start web UI (if enabled)
 	if m.cfg.Web.Enabled {
+		m.mu.Lock()
 		m.webSrv = webSrv
+		m.mu.Unlock()
 		go func() {
-			if err := m.webSrv.Start(); err != nil {
+			if err := webSrv.Start(); err != nil {
 				m.logger.Printf("Web 服务器错误: %v", err)
 			}
 		}()
@@ -126,14 +133,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) setupTunnels() {
+func (m *Manager) setupTunnels(tunnelMgr *tunnel.Manager) {
 	proxyURL := m.cfg.Network.ProxyURL
 	bindIface := m.cfg.Network.BindInterface
 
 	switch m.cfg.Tunnel.Type {
 	case "bore":
 		bt := tunnel.NewBoreNativeClient(m.cfg.Tunnel.Bore.Relay, "", m.logger, proxyURL, bindIface)
-		m.tunnelMgr.AddTunnel(bt)
+		tunnelMgr.AddTunnel(bt)
 	case "frp":
 		ft := tunnel.NewFRPNativeClient(
 			m.cfg.Tunnel.FRP.Server,
@@ -142,10 +149,10 @@ func (m *Manager) setupTunnels() {
 			m.cfg.Tunnel.FRP.RemotePort,
 			m.logger,
 		)
-		m.tunnelMgr.AddTunnel(ft)
+		tunnelMgr.AddTunnel(ft)
 	default:
 		bt := tunnel.NewBoreNativeClient(m.cfg.Tunnel.Bore.Relay, "", m.logger, proxyURL, bindIface)
-		m.tunnelMgr.AddTunnel(bt)
+		tunnelMgr.AddTunnel(bt)
 	}
 }
 
@@ -157,15 +164,18 @@ func (m *Manager) Stop() {
 		m.cancel()
 		m.cancel = nil
 	}
+	tunnelMgr := m.tunnelMgr
+	srv := m.srv
+	webSrv := m.webSrv
 	m.mu.Unlock()
-	if m.tunnelMgr != nil {
-		m.tunnelMgr.Stop()
+	if tunnelMgr != nil {
+		_ = tunnelMgr.Stop()
 	}
-	if m.srv != nil {
-		m.srv.Close()
+	if srv != nil {
+		_ = srv.Close()
 	}
-	if m.webSrv != nil {
-		m.webSrv.Stop()
+	if webSrv != nil {
+		webSrv.Stop()
 	}
 	m.logger.Printf("已停止")
 }
@@ -318,9 +328,11 @@ func (m *Manager) Restart() {
 		os.Setenv("all_proxy", m.cfg.Network.ProxyURL)
 	}
 
+	m.mu.Lock()
 	m.srv = nil
 	m.tunnelMgr = nil
 	m.webSrv = nil
+	m.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()

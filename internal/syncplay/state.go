@@ -71,7 +71,10 @@ func (c *Client) sendPeriodicState() {
 	}
 
 	// Check protocol timeout
-	if time.Since(c.lastUpdatedOn).Seconds() > ProtocolTimeout {
+	c.stateMu.Lock()
+	lastUpdated := c.lastUpdatedOn
+	c.stateMu.Unlock()
+	if time.Since(lastUpdated).Seconds() > ProtocolTimeout {
 		c.dropWithError("protocol timeout")
 		return
 	}
@@ -91,12 +94,28 @@ func (c *Client) sendPeriodicState() {
 // setBy: the watcher that set this state
 // forced: if true, increment serverIgnoringOnTheFly
 func (c *Client) sendState(position float64, paused bool, doSeek bool, setBy *Watcher, forced bool) {
+	// 快照状态字段（stateTicker 与连接处理 goroutine 共享，统一加锁）
+	c.stateMu.Lock()
 	var processingTime float64
-	if c.clientLatencyCalculationArrival.IsZero() {
-		processingTime = 0
-	} else {
+	if !c.clientLatencyCalculationArrival.IsZero() {
 		processingTime = time.Since(c.clientLatencyCalculationArrival).Seconds()
 	}
+	latency := c.ping.newTimestamp()
+	serverRTT := c.ping.getRTT()
+	var clientLatency float64
+	if c.clientLatencyCalculation != 0 {
+		clientLatency = c.clientLatencyCalculation + processingTime
+		c.clientLatencyCalculation = 0
+	}
+	if forced {
+		c.serverIgnoringOnTheFly++
+	}
+	serverIgnore := c.serverIgnoringOnTheFly
+	clientIgnore := c.clientIgnoringOnTheFly
+	if clientIgnore > 0 {
+		c.clientIgnoringOnTheFly = 0
+	}
+	c.stateMu.Unlock()
 
 	setByName := ""
 	if setBy != nil {
@@ -105,8 +124,8 @@ func (c *Client) sendState(position float64, paused bool, doSeek bool, setBy *Wa
 
 	state := &StateMsg{
 		Ping: &PingInfo{
-			LatencyCalculation: c.ping.newTimestamp(),
-			ServerRTT:          c.ping.getRTT(),
+			LatencyCalculation: latency,
+			ServerRTT:          serverRTT,
 		},
 		Playstate: &Playstate{
 			Position: position,
@@ -116,28 +135,22 @@ func (c *Client) sendState(position float64, paused bool, doSeek bool, setBy *Wa
 		},
 	}
 
-	if c.clientLatencyCalculation != 0 {
-		state.Ping.ClientLatencyCalculation = c.clientLatencyCalculation + processingTime
-		c.clientLatencyCalculation = 0
+	if clientLatency != 0 {
+		state.Ping.ClientLatencyCalculation = clientLatency
 	}
 
-	if forced {
-		c.serverIgnoringOnTheFly++
-	}
-
-	if c.serverIgnoringOnTheFly > 0 || c.clientIgnoringOnTheFly > 0 {
+	if serverIgnore > 0 || clientIgnore > 0 {
 		state.IgnoringOnTheFly = &IgnoreInfo{}
-		if c.serverIgnoringOnTheFly > 0 {
-			state.IgnoringOnTheFly.Server = c.serverIgnoringOnTheFly
+		if serverIgnore > 0 {
+			state.IgnoringOnTheFly.Server = serverIgnore
 		}
-		if c.clientIgnoringOnTheFly > 0 {
-			state.IgnoringOnTheFly.Client = c.clientIgnoringOnTheFly
-			c.clientIgnoringOnTheFly = 0
+		if clientIgnore > 0 {
+			state.IgnoringOnTheFly.Client = clientIgnore
 		}
 	}
 
 	// Only send if we don't have outstanding server ignores (unless forced)
-	if c.serverIgnoringOnTheFly == 0 || forced {
+	if serverIgnore == 0 || forced {
 		c.send(Message{State: state})
 	}
 }
@@ -146,18 +159,6 @@ func (c *Client) sendState(position float64, paused bool, doSeek bool, setBy *Wa
 func (c *Client) handleState(state *StateMsg) {
 	if state == nil {
 		return
-	}
-
-	// Handle ignoringOnTheFly ack
-	if state.IgnoringOnTheFly != nil {
-		if state.IgnoringOnTheFly.Server > 0 {
-			if c.serverIgnoringOnTheFly == state.IgnoringOnTheFly.Server {
-				c.serverIgnoringOnTheFly = 0
-			}
-		}
-		if state.IgnoringOnTheFly.Client > 0 {
-			c.clientIgnoringOnTheFly = state.IgnoringOnTheFly.Client
-		}
 	}
 
 	// Extract playstate. position stays nil when the client sent no
@@ -177,6 +178,20 @@ func (c *Client) handleState(state *StateMsg) {
 		}
 	}
 
+	// Handle ignoringOnTheFly ack + ping 状态（与 stateTicker 共享，统一加锁；
+	// watcher.updateState 放锁外，其内部广播路径会再次获取 stateMu）
+	c.stateMu.Lock()
+	if state.IgnoringOnTheFly != nil {
+		if state.IgnoringOnTheFly.Server > 0 {
+			if c.serverIgnoringOnTheFly == state.IgnoringOnTheFly.Server {
+				c.serverIgnoringOnTheFly = 0
+			}
+		}
+		if state.IgnoringOnTheFly.Client > 0 {
+			c.clientIgnoringOnTheFly = state.IgnoringOnTheFly.Client
+		}
+	}
+
 	// Handle ping
 	if state.Ping != nil {
 		latencyCalc := state.Ping.LatencyCalculation
@@ -187,8 +202,14 @@ func (c *Client) handleState(state *StateMsg) {
 	}
 
 	// Update watcher state only if server isn't ignoring
-	if c.serverIgnoringOnTheFly == 0 {
-		fd := c.ping.getForwardDelay()
+	serverIgnoring := c.serverIgnoringOnTheFly
+	var fd float64
+	if serverIgnoring == 0 {
+		fd = c.ping.getForwardDelay()
+	}
+	c.stateMu.Unlock()
+
+	if serverIgnoring == 0 {
 		c.watcher.updateState(position, paused, doSeek, fd)
 	}
 }

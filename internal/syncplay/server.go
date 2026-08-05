@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjfoc/gmsm/gmtls"
@@ -81,8 +82,10 @@ func (s *Server) Serve() {
 			continue
 		}
 		s.conns[conn] = struct{}{}
-		s.mu.Unlock()
+		// wg.Add 与 conns 注册同锁：Close 复制到该 conn 即保证 Add 已完成，
+		// 其 wg.Wait() 不会与 Add 并发、在 counter=0 时提前返回。
 		s.wg.Add(1)
+		s.mu.Unlock()
 		go s.handleConnection(conn)
 	}
 }
@@ -123,9 +126,10 @@ type Client struct {
 	clientLatencyCalculation      float64
 	clientLatencyCalculationArrival time.Time
 	lastUpdatedOn                 time.Time
+	stateMu                       sync.Mutex // 保护 lastUpdatedOn/延迟计算/ignoring 计数/ping（主循环与 stateTicker 双 goroutine 共享）
 	stateTicker                   *time.Ticker
 	done                          chan struct{}
-	closed                        bool
+	closed                        atomic.Bool
 	closeMu                       sync.Mutex
 }
 
@@ -199,7 +203,9 @@ func (c *Client) dispatch(msg Message) bool {
 		return false
 	}
 
+	c.stateMu.Lock()
 	c.lastUpdatedOn = time.Now()
+	c.stateMu.Unlock()
 
 	if msg.State != nil {
 		c.handleState(msg.State)
@@ -602,7 +608,7 @@ func (c *Client) send(msg Message) {
 func (c *Client) writeRaw(data []byte) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return
 	}
 	data = append(data, '\n')
@@ -621,10 +627,10 @@ func (c *Client) dropWithError(errorKey string) {
 func (c *Client) cleanup() {
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()
-	if c.closed {
+	if c.closed.Load() {
 		return
 	}
-	c.closed = true
+	c.closed.Store(true)
 	close(c.done)
 
 	if c.stateTicker != nil {

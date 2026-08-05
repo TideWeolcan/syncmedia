@@ -99,7 +99,7 @@ func requireToken(token string, next http.Handler) http.Handler {
 }
 
 func (ws *WebServer) Start() error { return ws.server.ListenAndServe() }
-func (ws *WebServer) Stop()        { if ws.server != nil { ws.server.Close() } }
+func (ws *WebServer) Stop()        { if ws.server != nil { _ = ws.server.Close() } }
 
 func (ws *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -124,13 +124,13 @@ func (ws *WebServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Allow", "GET, POST")
-	http.Error(w, "方法不允许", 405)
+	http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
 }
 
 func (ws *WebServer) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.Header().Set("Allow", "POST")
-		http.Error(w, "方法不允许", 405)
+		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
 		return
 	}
 	go ws.mgr.Restart()
@@ -140,7 +140,7 @@ func (ws *WebServer) handleRestart(w http.ResponseWriter, r *http.Request) {
 
 func (ws *WebServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(indexHTML))
+	_, _ = w.Write([]byte(indexHTML))
 }
 
 const indexHTML = `<!DOCTYPE html>
@@ -228,7 +228,9 @@ async function loadStatus() {
   }
 }
 function renderApp(s, settings) {
-  const addr = s.publicAddr || ('127.0.0.1:' + s.serverPort);
+  // publicAddr 来自隧道服务器（不可信），只保留 host:port 合法字符，
+  // 防止注入 HTML/JS；其余插值均来自服务器自有常量。
+  const addr = String(s.publicAddr || ('127.0.0.1:' + s.serverPort)).replace(/[^0-9A-Za-z.:\[\]-]/g, '');
   const isPublic = !!s.publicAddr;
   document.getElementById('app').innerHTML = '\
     <div class="card">\
