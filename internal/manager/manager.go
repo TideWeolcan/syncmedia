@@ -46,12 +46,15 @@ func NewManager(cfg *config.Config, logger *log.Logger) *Manager {
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	m.startTime = time.Now()
+	// 快照当前配置：UpdateSettings 在 m.mu 下原地修改 m.cfg，此处拷贝出
+	// 独立副本，本次 Start 生命周期内的读取不受后续设置更新影响。
+	cfg := *m.cfg
 	m.mu.Unlock()
 
 	// 0. 先构造 WebServer（校验绑定/认证配置），避免坏配置下 syncplay 已监听造成泄漏
 	var webSrv *WebServer
-	if m.cfg.Web.Enabled {
-		ws, err := NewWebServer(m.cfg.Web, m, m.logger)
+	if cfg.Web.Enabled {
+		ws, err := NewWebServer(cfg.Web, m, m.logger)
 		if err != nil {
 			return fmt.Errorf("web 配置: %w", err)
 		}
@@ -60,7 +63,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// 1. Prepare TLS (if enabled) — 纯内存生成，不写盘
 	var gmConfig *gmtls.Config
-	if m.cfg.Server.TLS {
+	if cfg.Server.TLS {
 		certs, err := syncplay.GenerateCertSet()
 		if err != nil {
 			return fmt.Errorf("TLS 证书: %w", err)
@@ -74,32 +77,32 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// 2. Start syncplay server
 	srvConfig := syncplay.ServerConfig{
-		Port:     m.cfg.Server.Port,
-		Password: m.cfg.Server.Password,
+		Port:     cfg.Server.Port,
+		Password: cfg.Server.Password,
 		GMConfig: gmConfig,
 		Logger:   m.logger,
 	}
 	srv := syncplay.NewServer(srvConfig)
-	if err := srv.Listen(m.cfg.Server.Port); err != nil {
+	if err := srv.Listen(cfg.Server.Port); err != nil {
 		return fmt.Errorf("syncplay 监听: %w", err)
 	}
 	m.mu.Lock()
 	m.srv = srv
 	m.mu.Unlock()
 	go srv.Serve()
-	m.logger.Printf("syncplay 服务器启动，端口 %d", m.cfg.Server.Port)
+	m.logger.Printf("syncplay 服务器启动，端口 %d", cfg.Server.Port)
 
 	// Wait for syncplay to be ready
-	if err := waitForPort(m.cfg.Server.Port, 5*time.Second); err != nil {
+	if err := waitForPort(cfg.Server.Port, 5*time.Second); err != nil {
 		return fmt.Errorf("syncplay 未就绪: %w", err)
 	}
 
 	// 3. Start tunnel
-	if m.cfg.Tunnel.Type != "none" {
+	if cfg.Tunnel.Type != "none" {
 		tunnelMgr := tunnel.NewManager(m.logger)
-		m.setupTunnels(tunnelMgr)
+		m.setupTunnels(&cfg, tunnelMgr)
 
-		if err := tunnelMgr.Start(m.cfg.Server.Port); err != nil {
+		if err := tunnelMgr.Start(cfg.Server.Port); err != nil {
 			m.logger.Printf("警告: 所有隧道均失败: %v（服务器仍在本地运行）", err)
 		} else {
 			m.mu.Lock()
@@ -112,7 +115,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// 4. Start web UI (if enabled)
-	if m.cfg.Web.Enabled {
+	if cfg.Web.Enabled {
 		m.mu.Lock()
 		m.webSrv = webSrv
 		m.mu.Unlock()
@@ -121,11 +124,11 @@ func (m *Manager) Start(ctx context.Context) error {
 				m.logger.Printf("Web 服务器错误: %v", err)
 			}
 		}()
-		m.logger.Printf("WebUI 启动，端口 %d", m.cfg.Web.Port)
+		m.logger.Printf("WebUI 启动，端口 %d", cfg.Web.Port)
 	}
 
 	// 5. Print summary
-	m.printSummary()
+	m.printSummary(&cfg)
 
 	// 6. Block until context cancelled
 	<-ctx.Done()
@@ -133,25 +136,25 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) setupTunnels(tunnelMgr *tunnel.Manager) {
-	proxyURL := m.cfg.Network.ProxyURL
-	bindIface := m.cfg.Network.BindInterface
+func (m *Manager) setupTunnels(cfg *config.Config, tunnelMgr *tunnel.Manager) {
+	proxyURL := cfg.Network.ProxyURL
+	bindIface := cfg.Network.BindInterface
 
-	switch m.cfg.Tunnel.Type {
+	switch cfg.Tunnel.Type {
 	case "bore":
-		bt := tunnel.NewBoreNativeClient(m.cfg.Tunnel.Bore.Relay, "", m.logger, proxyURL, bindIface)
+		bt := tunnel.NewBoreNativeClient(cfg.Tunnel.Bore.Relay, "", m.logger, proxyURL, bindIface)
 		tunnelMgr.AddTunnel(bt)
 	case "frp":
 		ft := tunnel.NewFRPNativeClient(
-			m.cfg.Tunnel.FRP.Server,
-			m.cfg.Tunnel.FRP.Port,
-			m.cfg.Tunnel.FRP.Token,
-			m.cfg.Tunnel.FRP.RemotePort,
+			cfg.Tunnel.FRP.Server,
+			cfg.Tunnel.FRP.Port,
+			cfg.Tunnel.FRP.Token,
+			cfg.Tunnel.FRP.RemotePort,
 			m.logger,
 		)
 		tunnelMgr.AddTunnel(ft)
 	default:
-		bt := tunnel.NewBoreNativeClient(m.cfg.Tunnel.Bore.Relay, "", m.logger, proxyURL, bindIface)
+		bt := tunnel.NewBoreNativeClient(cfg.Tunnel.Bore.Relay, "", m.logger, proxyURL, bindIface)
 		tunnelMgr.AddTunnel(bt)
 	}
 }
@@ -217,7 +220,7 @@ type Status struct {
 	RestartError string `json:"restartError,omitempty"`
 }
 
-func (m *Manager) printSummary() {
+func (m *Manager) printSummary(cfg *config.Config) {
 	m.logger.Println("═══════════════════════════════════════════")
 	m.logger.Println("  SyncMedia 已启动")
 	m.logger.Println("═══════════════════════════════════════════")
@@ -228,12 +231,12 @@ func (m *Manager) printSummary() {
 		m.logger.Printf("  公共地址: %s", addr)
 		m.logger.Printf("  朋友在 Kazumi 中填入: %s", addr)
 	} else {
-		m.logger.Printf("  本地地址: 127.0.0.1:%d", m.cfg.Server.Port)
+		m.logger.Printf("  本地地址: 127.0.0.1:%d", cfg.Server.Port)
 		m.logger.Println("  (隧道未建立，仅本地可用)")
 	}
-	m.logger.Printf("  TLS: %v", m.cfg.Server.TLS)
-	if m.cfg.Web.Enabled {
-		m.logger.Printf("  WebUI: http://127.0.0.1:%d", m.cfg.Web.Port)
+	m.logger.Printf("  TLS: %v", cfg.Server.TLS)
+	if cfg.Web.Enabled {
+		m.logger.Printf("  WebUI: http://127.0.0.1:%d", cfg.Web.Port)
 	}
 	m.logger.Println("═══════════════════════════════════════════")
 }
@@ -277,17 +280,22 @@ func redactProxyURL(s string) string {
 
 // GetSettings 返回当前可配置项（代理密码脱敏）。
 func (m *Manager) GetSettings() SettingsResponse {
+	m.mu.RLock()
+	cfg := *m.cfg
+	m.mu.RUnlock()
 	return SettingsResponse{
-		TunnelType:    m.cfg.Tunnel.Type,
-		ProxyURL:      redactProxyURL(m.cfg.Network.ProxyURL),
-		BindInterface: m.cfg.Network.BindInterface,
-		NoProxy:       m.cfg.Network.NoProxy,
-		TLSEnabled:    m.cfg.Server.TLS,
+		TunnelType:    cfg.Tunnel.Type,
+		ProxyURL:      redactProxyURL(cfg.Network.ProxyURL),
+		BindInterface: cfg.Network.BindInterface,
+		NoProxy:       cfg.Network.NoProxy,
+		TLSEnabled:    cfg.Server.TLS,
 	}
 }
 
-// UpdateSettings 更新配置并触发重启。
+// UpdateSettings 更新配置并触发重启。m.cfg 始终是 NewManager 传入的同一
+// 对象，修改在 m.mu 下进行；Start/Restart 用锁内拷贝的快照，不受影响。
 func (m *Manager) UpdateSettings(req SettingsRequest) {
+	m.mu.Lock()
 	if req.TunnelType != "" {
 		m.cfg.Tunnel.Type = req.TunnelType
 	}
@@ -303,6 +311,7 @@ func (m *Manager) UpdateSettings(req SettingsRequest) {
 	}
 	m.logger.Printf("设置已更新: tunnel=%s proxy=%s iface=%s noProxy=%v",
 		m.cfg.Tunnel.Type, redactProxyURL(m.cfg.Network.ProxyURL), m.cfg.Network.BindInterface, m.cfg.Network.NoProxy)
+	m.mu.Unlock()
 	go m.Restart()
 }
 
@@ -314,18 +323,23 @@ func (m *Manager) Restart() {
 	m.logger.Printf("正在重启...")
 	m.Stop()
 
+	// 快照配置供本轮回启用（拷贝，独立于后续 UpdateSettings 的原地修改）
+	m.mu.Lock()
+	cfg := *m.cfg
+	m.mu.Unlock()
+
 	// 根据 NoProxy 配置管理代理环境变量
-	if m.cfg.Network.NoProxy {
+	if cfg.Network.NoProxy {
 		os.Unsetenv("HTTP_PROXY")
 		os.Unsetenv("HTTPS_PROXY")
 		os.Unsetenv("ALL_PROXY")
 		os.Unsetenv("http_proxy")
 		os.Unsetenv("https_proxy")
 		os.Unsetenv("all_proxy")
-	} else if m.cfg.Network.ProxyURL != "" {
+	} else if cfg.Network.ProxyURL != "" {
 		// NoProxy 未启用且配置了代理：确保环境变量能被 net/http 的 ProxyFromEnvironment 读取
-		os.Setenv("ALL_PROXY", m.cfg.Network.ProxyURL)
-		os.Setenv("all_proxy", m.cfg.Network.ProxyURL)
+		os.Setenv("ALL_PROXY", cfg.Network.ProxyURL)
+		os.Setenv("all_proxy", cfg.Network.ProxyURL)
 	}
 
 	m.mu.Lock()
