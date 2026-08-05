@@ -333,8 +333,11 @@ func (c *Client) handleHello(hello *HelloMsg) {
 // Uses raw JSON to include ServerFeatures (which differs from ClientFeatures).
 func (c *Client) sendHelloResponse(clientVersion string) {
 	roomName := ""
-	if c.watcher.room != nil {
-		roomName = c.watcher.room.getName()
+	c.watcher.mu.Lock()
+	room := c.watcher.room
+	c.watcher.mu.Unlock()
+	if room != nil {
+		roomName = room.getName()
 	}
 
 	helloData := map[string]interface{}{
@@ -369,15 +372,21 @@ func (c *Client) sendHelloResponse(clientVersion string) {
 
 // sendJoinMessage broadcasts to the room that this watcher joined.
 func (c *Client) sendJoinMessage() {
-	if c.watcher == nil || c.watcher.room == nil {
+	if c.watcher == nil {
+		return
+	}
+	c.watcher.mu.Lock()
+	room := c.watcher.room
+	c.watcher.mu.Unlock()
+	if room == nil {
 		return
 	}
 
 	// Notify others in room
-	roomName := c.watcher.room.getName()
+	roomName := room.getName()
 
 	// Send to all other watchers in room
-	watchers := c.watcher.room.getWatchers()
+	watchers := room.getWatchers()
 	for _, w := range watchers {
 		if w == c.watcher {
 			continue
@@ -387,8 +396,11 @@ func (c *Client) sendJoinMessage() {
 			Room:  &RoomRef{Name: roomName},
 			Event: &EventInfo{Joined: true},
 		}
-		if c.watcher.file != nil {
-			ev.File = c.watcher.file
+		w.mu.Lock()
+		file := w.file
+		w.mu.Unlock()
+		if file != nil {
+			ev.File = file
 		}
 		w.sendMessage(Message{Set: &SetMsg{
 			User: map[string]*UserEvent{c.watcher.name: ev},
@@ -403,8 +415,11 @@ func (c *Client) sendJoinMessage() {
 		ev := &UserEvent{
 			Room: &RoomRef{Name: roomName},
 		}
-		if w.file != nil {
-			ev.File = w.file
+		w.mu.Lock()
+		file := w.file
+		w.mu.Unlock()
+		if file != nil {
+			ev.File = file
 		}
 		c.send(Message{Set: &SetMsg{
 			User: map[string]*UserEvent{w.name: ev},
@@ -416,11 +431,14 @@ func (c *Client) sendJoinMessage() {
 		if w == c.watcher {
 			continue
 		}
-		if w.ready != nil {
+		w.mu.Lock()
+		ready := w.ready
+		w.mu.Unlock()
+		if ready != nil {
 			c.send(Message{Set: &SetMsg{
 				Ready: &ReadySet{
 					Username:         w.name,
-					IsReady:          *w.ready,
+					IsReady:          *ready,
 					ManuallyInitiated: false,
 				},
 			}})
@@ -430,10 +448,16 @@ func (c *Client) sendJoinMessage() {
 
 // sendLeftMessage broadcasts to the room that this watcher left.
 func (c *Client) sendLeftMessage() {
-	if c.watcher == nil || c.watcher.room == nil {
+	if c.watcher == nil {
 		return
 	}
-	roomName := c.watcher.room.getName()
+	c.watcher.mu.Lock()
+	room := c.watcher.room
+	c.watcher.mu.Unlock()
+	if room == nil {
+		return
+	}
+	roomName := room.getName()
 	c.server.rooms.broadcastRoom(c.watcher, Message{
 		Set: &SetMsg{
 			User: map[string]*UserEvent{
@@ -459,17 +483,23 @@ func (c *Client) handleSet(set *SetMsg) {
 	if set.File != nil {
 		// File update
 		c.watcher.setFile(set.File)
-		// Broadcast file change to room
-		c.server.rooms.broadcastRoom(c.watcher, Message{
-			Set: &SetMsg{
-				User: map[string]*UserEvent{
-					c.watcher.name: {
-						Room: &RoomRef{Name: c.watcher.room.getName()},
-						File: c.watcher.file,
+		// Broadcast file change to room（room/file 锁内快照，见 cleanup 的 ticker 路径）
+		c.watcher.mu.Lock()
+		room := c.watcher.room
+		file := c.watcher.file
+		c.watcher.mu.Unlock()
+		if room != nil {
+			c.server.rooms.broadcastRoom(c.watcher, Message{
+				Set: &SetMsg{
+					User: map[string]*UserEvent{
+						c.watcher.name: {
+							Room: &RoomRef{Name: room.getName()},
+							File: file,
+						},
 					},
 				},
-			},
-		}, true)
+			}, true)
+		}
 	}
 
 	if set.Ready != nil {
@@ -493,10 +523,16 @@ func (c *Client) handleSet(set *SetMsg) {
 
 // sendRoomSwitchMessage notifies the room of a watcher's room switch.
 func (c *Client) sendRoomSwitchMessage() {
-	if c.watcher == nil || c.watcher.room == nil {
+	if c.watcher == nil {
 		return
 	}
-	roomName := c.watcher.room.getName()
+	c.watcher.mu.Lock()
+	room := c.watcher.room
+	c.watcher.mu.Unlock()
+	if room == nil {
+		return
+	}
+	roomName := room.getName()
 
 	// Broadcast user's new room to everyone in the room
 	c.server.rooms.broadcastRoom(c.watcher, Message{
@@ -510,7 +546,7 @@ func (c *Client) sendRoomSwitchMessage() {
 	}, true)
 
 	// Send existing members to the switched watcher
-	watchers := c.watcher.room.getWatchers()
+	watchers := room.getWatchers()
 	for _, w := range watchers {
 		if w == c.watcher {
 			continue
@@ -518,8 +554,11 @@ func (c *Client) sendRoomSwitchMessage() {
 		ev := &UserEvent{
 			Room: &RoomRef{Name: roomName},
 		}
-		if w.file != nil {
-			ev.File = w.file
+		w.mu.Lock()
+		file := w.file
+		w.mu.Unlock()
+		if file != nil {
+			ev.File = file
 		}
 		c.send(Message{Set: &SetMsg{
 			User: map[string]*UserEvent{w.name: ev},
@@ -542,24 +581,32 @@ func (c *Client) handleList() {
 	allWatchers := c.server.rooms.getAllWatchers()
 	userlist := make(map[string]map[string]interface{})
 	for _, w := range allWatchers {
-		if w.room == nil {
+		// 快照他人 watcher 的可变字段（room/file/ready），避免与断开清理竞态
+		w.mu.Lock()
+		room := w.room
+		var roomName string
+		if room != nil {
+			roomName = room.getName()
+		}
+		file := w.file
+		isReady := false
+		if w.ready != nil {
+			isReady = *w.ready
+		}
+		w.mu.Unlock()
+		if room == nil {
 			continue
 		}
-		roomName := w.room.getName()
 		if _, ok := userlist[roomName]; !ok {
 			userlist[roomName] = make(map[string]interface{})
 		}
 		fileInfo := map[string]interface{}{}
-		if w.file != nil {
+		if file != nil {
 			fileInfo = map[string]interface{}{
-				"name":     w.file.Name,
-				"duration": w.file.Duration,
-				"size":     w.file.Size,
+				"name":     file.Name,
+				"duration": file.Duration,
+				"size":     file.Size,
 			}
-		}
-		isReady := false
-		if w.ready != nil {
-			isReady = *w.ready
 		}
 		userlist[roomName][w.name] = map[string]interface{}{
 			"position":  0,
@@ -575,18 +622,21 @@ func (c *Client) handleList() {
 // forcePositionUpdate persists the initiator's position as the room's
 // authoritative position and broadcasts a forced state update to the room.
 func (s *Server) forcePositionUpdate(watcher *Watcher, doSeek bool, watcherPauseState *bool) {
-	if watcher.room == nil {
+	watcher.mu.Lock()
+	room := watcher.room
+	watcher.mu.Unlock()
+	if room == nil {
 		return
 	}
 	pos := watcher.getPosition()
-	paused := watcher.room.isPaused()
+	paused := room.isPaused()
 	setBy := watcher
 
 	// Write the room's authoritative position (and sync every watcher to
 	// it), so subsequent periodic States don't snap back to a stale value.
-	watcher.room.setPosition(pos, watcher)
+	room.setPosition(pos, watcher)
 
-	watchers := watcher.room.getWatchers()
+	watchers := room.getWatchers()
 	for _, w := range watchers {
 		if w.client == nil {
 			continue

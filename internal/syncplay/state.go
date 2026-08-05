@@ -66,7 +66,16 @@ func (c *Client) startStateLoop() {
 
 // sendPeriodicState sends the current room state to this client.
 func (c *Client) sendPeriodicState() {
-	if !c.logged || c.watcher == nil || c.watcher.room == nil {
+	if !c.logged || c.watcher == nil {
+		return
+	}
+
+	// 锁内快照 watcher 的房间引用：ticker goroutine 与连接处理 goroutine
+	// 并发，watcher 可能正被清理（removeWatcher 会置 nil）
+	c.watcher.mu.Lock()
+	room := c.watcher.room
+	c.watcher.mu.Unlock()
+	if room == nil {
 		return
 	}
 
@@ -79,7 +88,6 @@ func (c *Client) sendPeriodicState() {
 		return
 	}
 
-	room := c.watcher.room
 	pos := room.getPosition()
 	paused := room.isPaused()
 	setBy := room.getSetBy()

@@ -139,14 +139,13 @@ func (f *FRPNativeClient) Stop() error {
 		return nil
 	}
 	f.closed = true
-	svc := f.svc
 	f.setStateLocked(StateStopped, "")
 	f.mu.Unlock()
 
+	// 只经 done→cancel(ctx) 单一路径关闭：frp v0.70.1 的 Service.Close
+	// 与 Run 并发存在库内 data race（GracefulClose 触碰 svr 字段），而
+	// Run 在 ctx 取消后会自行 stop() 清理，无需再调用 svc.Close()。
 	close(f.done)
-	if svc != nil {
-		svc.Close()
-	}
 	return nil
 }
 

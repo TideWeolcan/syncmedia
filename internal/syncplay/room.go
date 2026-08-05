@@ -108,7 +108,9 @@ func (r *Room) addWatcher(w *Watcher) {
 		w.setPosition(r.getPositionLocked())
 	}
 	r.watchers[w.name] = w
+	w.mu.Lock()
 	w.room = r
+	w.mu.Unlock()
 }
 
 func (r *Room) removeWatcher(w *Watcher) {
@@ -119,7 +121,9 @@ func (r *Room) removeWatcher(w *Watcher) {
 	if r.watchers[w.name] == w {
 		delete(r.watchers, w.name)
 	}
+	w.mu.Lock()
 	w.room = nil
+	w.mu.Unlock()
 	if len(r.watchers) == 0 {
 		r.position = 0
 	}
@@ -156,7 +160,9 @@ func (rm *RoomManager) getRoom(name string) *Room {
 
 func (rm *RoomManager) moveWatcher(w *Watcher, roomName string) {
 	rm.mu.Lock()
+	w.mu.Lock()
 	oldRoom := w.room
+	w.mu.Unlock()
 	rm.mu.Unlock()
 
 	if oldRoom != nil {
@@ -171,7 +177,9 @@ func (rm *RoomManager) moveWatcher(w *Watcher, roomName string) {
 
 func (rm *RoomManager) removeWatcher(w *Watcher) {
 	rm.mu.Lock()
+	w.mu.Lock()
 	oldRoom := w.room
+	w.mu.Unlock()
 	// Release the username reservation taken by findFreeUsername.
 	delete(rm.names, w.name)
 	rm.mu.Unlock()
@@ -226,10 +234,13 @@ func (rm *RoomManager) findFreeUsername(username string) string {
 
 // broadcastRoom sends a message to all watchers in the sender's room except sender.
 func (rm *RoomManager) broadcastRoom(sender *Watcher, msg Message, includeSender bool) {
-	if sender.room == nil {
+	sender.mu.Lock()
+	room := sender.room
+	sender.mu.Unlock()
+	if room == nil {
 		return
 	}
-	watchers := sender.room.getWatchers()
+	watchers := room.getWatchers()
 	for _, w := range watchers {
 		if !includeSender && w == sender {
 			continue
@@ -256,13 +267,19 @@ func (rm *RoomManager) getAllWatchers() []*Watcher {
 // Watcher represents a connected user in a room.
 type Watcher struct {
 	name          string
+	client        *Client // back-reference for sending messages
+	version       string
+	features      *ClientFeatures
+
+	// mu 保护以下可变字段：room/file/position/ready/lastUpdatedOn 会被
+	// 本连接 goroutine 写入、被其他连接 goroutine（handleList/广播）与
+	// 本连接 stateTicker goroutine 读取。锁序：Room.mu → Watcher.mu，
+	// 反向不存在（读取处均在 w.mu 内快照、解锁后再访问 Room）。
+	mu            sync.Mutex
 	room          *Room
 	file          *FileInfo
 	position      float64
 	ready         *bool
-	client        *Client // back-reference for sending messages
-	version       string
-	features      *ClientFeatures
 	lastUpdatedOn time.Time
 }
 
@@ -278,26 +295,38 @@ func (w *Watcher) setFile(f *FileInfo) {
 	if f != nil && f.Name != "" {
 		f.Name = truncateText(f.Name, MaxFilenameLength)
 	}
+	w.mu.Lock()
 	w.file = f
+	w.mu.Unlock()
 }
 
 func (w *Watcher) setPosition(pos float64) {
+	w.mu.Lock()
 	w.position = pos
+	w.mu.Unlock()
 }
 
+// getPosition 返回 watcher 的当前位置。若房间处于播放中，按 lastUpdatedOn
+// 外推；暂停则返回存储值。锁内快照字段后解锁再访问房间，避免锁序反转。
 func (w *Watcher) getPosition() float64 {
-	if w.room == nil {
-		return w.position
+	w.mu.Lock()
+	room := w.room
+	pos := w.position
+	lastUpdated := w.lastUpdatedOn
+	w.mu.Unlock()
+	if room == nil {
+		return pos
 	}
-	if w.room.isPlaying() {
-		elapsed := time.Since(w.lastUpdatedOn).Seconds()
-		return w.position + elapsed
+	if room.isPlaying() {
+		return pos + time.Since(lastUpdated).Seconds()
 	}
-	return w.position
+	return pos
 }
 
 func (w *Watcher) setReady(ready bool) {
+	w.mu.Lock()
 	w.ready = &ready
+	w.mu.Unlock()
 }
 
 func (w *Watcher) sendMessage(msg Message) {
@@ -310,13 +339,16 @@ func (w *Watcher) sendMessage(msg Message) {
 // watcher. position is nil when the client sent no playstate; a non-nil 0 is
 // a legitimate seek to the start of the file.
 func (w *Watcher) updateState(position *float64, paused *bool, doSeek *bool, messageAge float64) {
+	w.mu.Lock()
 	w.lastUpdatedOn = time.Now()
+	room := w.room
+	w.mu.Unlock()
 
 	pauseChanged := false
-	if paused != nil && w.room != nil {
-		pauseChanged = (w.room.isPaused() && !*paused) || (!w.room.isPaused() && *paused)
+	if paused != nil && room != nil {
+		pauseChanged = (room.isPaused() && !*paused) || (!room.isPaused() && *paused)
 		if pauseChanged {
-			w.room.setPaused(*paused, w)
+			room.setPaused(*paused, w)
 		}
 	}
 
