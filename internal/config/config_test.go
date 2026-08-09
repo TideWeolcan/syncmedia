@@ -335,7 +335,7 @@ func resolveFieldPath(t reflect.Type, path string) error {
 	parts := strings.Split(path, ".")
 	cur := t
 	for _, part := range parts {
-		for cur.Kind() == reflect.Ptr {
+		for cur.Kind() == reflect.Pointer {
 			cur = cur.Elem()
 		}
 		if cur.Kind() != reflect.Struct {

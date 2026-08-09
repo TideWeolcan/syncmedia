@@ -31,13 +31,32 @@ type PortState struct {
 }
 
 // PortAvailable 用临时 bind 探测端口是否空闲（探测后立即关闭让出）。
-// 使用全接口（":port"）探测：与 syncplay 的监听方式一致，且能感知
-// 已绑定到任意具体地址的端口占用。
+// 双地址族探测：分别尝试 IPv4（0.0.0.0:port）与 IPv6（[::]:port）通配绑定，
+// 任一失败即视为端口不可用。原因：":port" 在 Go 中默认解析为 IPv6 通配
+// [::]:port，在 v6only 平台（Windows/macOS）感知不到仅绑 IPv4
+// （如 127.0.0.1:port）的占用者，会误判空闲；双地址族覆盖所有平台——
+// v6only 平台上 IPv4 占用撞 0.0.0.0 探测、IPv6 占用撞 [::] 探测，
+// Linux dual-stack 上两者本来就互相冲突，同样正确检测。
+// 系统未启用某地址族（如 IPv6 被禁用）时，该族探测必然失败，
+// 先用端口 0 基线确认地址族本身不可用，则跳过、仅以另一族结果为准。
 func PortAvailable(port int) bool {
 	if port <= 0 || port > 65535 {
 		return false
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	// IPv4 通配探测：正常系统必然支持 IPv4，失败即端口被 IPv4 占用
+	if !probeBind(fmt.Sprintf("0.0.0.0:%d", port)) {
+		return false
+	}
+	// IPv6 通配探测：地址族可用（非禁 IPv6 环境）却 bind 失败 → 端口被占用
+	if !probeBind(fmt.Sprintf("[::]:%d", port)) && probeBind("[::]:0") {
+		return false
+	}
+	return true
+}
+
+// probeBind 尝试在 addr 上 bind 后立即关闭，成功返回 true（不改变监听状态）。
+func probeBind(addr string) bool {
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return false
 	}
