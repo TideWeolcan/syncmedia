@@ -74,9 +74,21 @@ func TestStartResolvesAutoPortAndPersists(t *testing.T) {
 	}
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
-	go func() { _ = m.Start(ctx2) }()
+	startDone2 := make(chan error, 1)
+	go func() { startDone2 <- m.Start(ctx2) }()
 	port2 := waitStatusPort(t, m, 5*time.Second)
 	cancel2()
+	// waitStatusPort 读到的是第一次 Start 留下的端口（Stop 不重置），cancel2
+	// 可能先于第二次 Start 越过启动检查点触发，Start 因此以 context.Canceled
+	// 退出——属预期路径；这里只等待其退出，消除与 TempDir 清理的竞态。
+	select {
+	case err := <-startDone2:
+		if err != nil && err != context.Canceled {
+			t.Fatalf("第二次 Start 返回错误: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("第二次 Start 未在 5s 内退出")
+	}
 	if port2 != port {
 		t.Errorf("重启后端口从 %d 漂移到 %d（应沿用记住的端口）", port, port2)
 	}
