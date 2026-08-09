@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -55,7 +56,14 @@ func NewWebServer(cfg config.WebConfig, mgr *Manager, logger *log.Logger) (*WebS
 	mux.HandleFunc("/api/restart", ws.handleRestart)
 	var handler http.Handler = mux
 	if cfg.Token != "" {
-		handler = requireToken(cfg.Token, mux)
+		handler = requireToken(cfg.Token, handler)
+	}
+	// Host 校验（仅回环绑定启用）：token 为空时回环绑定是零认证入口，
+	// DNS rebinding 可把攻击者域名解析到 127.0.0.1 无认证读写 API；
+	// 校验 Host 头必须匹配回环主机名/绑定地址，其余拒绝。
+	// 注意不能强制回环也要求 token（Android app 连 127.0.0.1 无 token）。
+	if isLoopbackBind(bind) {
+		handler = requireHost(makeLoopbackHostPolicy(bind), handler)
 	}
 	ws.server = &http.Server{
 		Addr:              net.JoinHostPort(bind, strconv.Itoa(cfg.Port)),
@@ -66,6 +74,38 @@ func NewWebServer(cfg config.WebConfig, mgr *Manager, logger *log.Logger) (*WebS
 		IdleTimeout:       120 * time.Second,
 	}
 	return ws, nil
+}
+
+// makeLoopbackHostPolicy 返回回环绑定的 Host 白名单：回环主机名
+// （127.0.0.1/localhost/::1 等）与配置的绑定地址。
+func makeLoopbackHostPolicy(bind string) func(string) bool {
+	allowed := map[string]bool{
+		"127.0.0.1":       true,
+		"localhost":       true,
+		"::1":             true,
+		"0:0:0:0:0:0:0:1": true,
+	}
+	if bind != "" {
+		allowed[strings.ToLower(bind)] = true
+	}
+	return func(host string) bool {
+		return allowed[strings.ToLower(host)]
+	}
+}
+
+// requireHost 校验 Host 头（去掉端口后）在允许集合内，拒绝 DNS rebinding。
+func requireHost(allowed func(host string) bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if i := strings.LastIndex(host, ":"); i >= 0 && !strings.Contains(host[i:], "]") {
+			host = host[:i] // 去掉 ":port"（IPv6 用 "]":port 形态，不会被误切）
+		}
+		if !allowed(host) {
+			http.Error(w, "拒绝访问：Host 不受信任", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // isLoopbackBind 判定绑定地址是否为本机回环："localhost" 或可解析且为
@@ -99,7 +139,19 @@ func requireToken(token string, next http.Handler) http.Handler {
 }
 
 func (ws *WebServer) Start() error { return ws.server.ListenAndServe() }
-func (ws *WebServer) Stop()        { if ws.server != nil { _ = ws.server.Close() } }
+
+// Stop 优雅停机：先 Shutdown 等待在途请求排空（5s 超时），超时才强制 Close，
+// 避免硬断打断进行中的 API 请求。
+func (ws *WebServer) Stop() {
+	if ws.server == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ws.server.Shutdown(ctx); err != nil {
+		_ = ws.server.Close() // 超时未排空：强制关闭
+	}
+}
 
 func (ws *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -113,6 +165,8 @@ func (ws *WebServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "POST" {
+		// 限制请求体大小，防止恶意超大请求体占满内存
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		var req SettingsRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "无效请求", 400)
@@ -213,6 +267,11 @@ function toast(msg) {
   t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2500);
 }
+// esc 对插入 HTML 属性/text 的用户可控值做 HTML 实体转义，
+// 防止 proxyUrl/bindInterface 等含引号/标签的输入突破属性注入脚本。
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 async function copyAddr(text) {
   try { await navigator.clipboard.writeText(text); toast('已复制到剪贴板'); }
   catch(e) { toast('复制失败'); }
@@ -245,6 +304,8 @@ function renderApp(s, settings) {
         <div class="stat"><div class="stat-label">TLS</div><div class="stat-value '+(s.tlsEnabled?'on':'')+'">'+(s.tlsEnabled?'TLS 1.3':'关闭')+'</div></div>\
         <div class="stat"><div class="stat-label">国密</div><div class="stat-value '+(s.tlsEnabled?'on':'')+'">'+(s.tlsEnabled?'SM2/SM3/SM4':'关闭')+'</div></div>\
         <div class="stat"><div class="stat-label">运行时间</div><div class="stat-value">'+s.uptime+'</div></div>\
+        <div class="stat"><div class="stat-label">Syncplay</div><div class="stat-value">'+(s.serverPort||'-')+(s.serverPortNote?'<span style="color:var(--dim);font-size:.65rem">'+esc(s.serverPortNote)+'</span>':'')+'</div></div>\
+        <div class="stat"><div class="stat-label">WebUI</div><div class="stat-value">'+(s.webPort||'-')+(s.webPortNote?'<span style="color:var(--dim);font-size:.65rem">'+esc(s.webPortNote)+'</span>':'')+'</div></div>\
       </div>\
     </div>\
     <div class="card">\
@@ -259,11 +320,11 @@ function renderApp(s, settings) {
       </div>\
       <div class="field">\
         <label>网络代理 (HTTP/SOCKS5)</label>\
-        <input type="text" id="proxyUrl" placeholder="如 socks5://127.0.0.1:1080" value="'+(settings.proxyUrl||'')+'">\
+        <input type="text" id="proxyUrl" placeholder="如 socks5://127.0.0.1:1080" value="'+(esc(settings.proxyUrl||''))+'">\
       </div>\
       <div class="field">\
         <label>绑定网卡（绕过 VPN）</label>\
-        <input type="text" id="bindInterface" placeholder="如 wlan0（留空=不绑定）" value="'+(settings.bindInterface||'')+'">\
+        <input type="text" id="bindInterface" placeholder="如 wlan0（留空=不绑定）" value="'+(esc(settings.bindInterface||''))+'">\
       </div>\
       <div class="toggle-row">\
         <span>绕过系统代理</span>\

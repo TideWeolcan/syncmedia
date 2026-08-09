@@ -10,6 +10,7 @@ const (
 	MaxUsernameLength = 16
 	MaxRoomNameLength = 35
 	MaxFilenameLength = 250
+	MaxMessageLength  = 64 * 1024 // 单行消息最大字节数，防内存 DoS
 	ServerVersion     = "1.7.5"
 )
 

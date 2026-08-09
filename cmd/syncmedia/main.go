@@ -42,7 +42,6 @@ func runStart(args []string) {
 		webPort       int
 		noTLS         bool
 		tunnelType    string
-		boreBinary    string
 		frpServer     string
 		proxyURL      string
 		bindInterface string
@@ -50,11 +49,10 @@ func runStart(args []string) {
 	)
 
 	fs.StringVar(&configPath, "config", "", "配置文件路径 (默认: ./config.yaml)")
-	fs.IntVar(&serverPort, "port", 0, "syncplay 服务器端口 (默认: 8999)")
-	fs.IntVar(&webPort, "web-port", 0, "WebUI 端口 (默认: 8080)")
+	fs.IntVar(&serverPort, "port", 0, "syncplay 服务器端口 (默认: 8999，被占自动避让)")
+	fs.IntVar(&webPort, "web-port", 0, "WebUI 端口 (默认: 8080，被占自动避让)")
 	fs.BoolVar(&noTLS, "no-tls", false, "禁用 TLS (明文模式)")
 	fs.StringVar(&tunnelType, "tunnel", "", "隧道类型: bore | frp | none (默认: bore)")
-	fs.StringVar(&boreBinary, "bore-binary", "", "bore 二进制路径")
 	fs.StringVar(&frpServer, "frp-server", "", "frp 服务器地址")
 	fs.StringVar(&proxyURL, "proxy", "", "网络代理 (如 socks5://127.0.0.1:1080)")
 	fs.StringVar(&bindInterface, "bind-interface", "", "绑定网卡绕过 VPN (如 wlan0)")
@@ -86,7 +84,7 @@ func runStart(args []string) {
 	if noProxy {
 		noProxyFlag = &noProxy
 	}
-	cfg.ApplyCLIOverrides(serverPort, webPort, tlsFlag, tunnelType, boreBinary, frpServer, proxyURL, bindInterface, noProxyFlag)
+	cfg.ApplyCLIOverrides(serverPort, webPort, tlsFlag, tunnelType, frpServer, proxyURL, bindInterface, noProxyFlag)
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -128,11 +126,10 @@ func writeUsage(w io.Writer) {
 
 选项:
   --config <path>      配置文件路径 (默认: ./config.yaml)
-  --port <port>        syncplay 服务器端口 (默认: 8999)
-  --web-port <port>    WebUI 端口 (默认: 8080)
+  --port <port>        syncplay 服务器端口 (默认: 8999，被占自动避让)
+  --web-port <port>    WebUI 端口 (默认: 8080，被占自动避让)
   --no-tls             禁用 TLS (明文模式)
   --tunnel <type>      隧道类型: bore | frp | none (默认: bore)
-  --bore-binary <path> bore 二进制路径
   --frp-server <addr>  frp 服务器地址
   --proxy <url>        网络代理 (如 socks5://127.0.0.1:1080)
   --bind-interface <iface> 绑定网卡绕过 VPN (如 wlan0)

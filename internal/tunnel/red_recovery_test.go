@@ -21,7 +21,7 @@ func TestBoreStaleAddrAfterControlLoss(t *testing.T) {
 	m := NewManager(testLogger())
 	m.AddTunnel(b)
 
-	if err := m.Start(freeTCPPort(t)); err != nil {
+	if err := m.Start(context.Background(), freeTCPPort(t)); err != nil {
 		t.Fatalf("Manager.Start 失败: %v", err)
 	}
 	t.Cleanup(func() { _ = m.Stop() })

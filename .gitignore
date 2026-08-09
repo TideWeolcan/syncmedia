@@ -1,12 +1,6 @@
 # 构建产物
 /syncmedia
-syncmedia.apk
-syncmedia.apk.idsig
-syncmedia-ksu.zip
 dist/
-
-# Android 构建缓存
-android/build/
 
 # 运行时目录
 .syncmedia/
@@ -28,3 +22,7 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# 本地工具目录（不提交）
+.cloud-code/
+.codegraph/

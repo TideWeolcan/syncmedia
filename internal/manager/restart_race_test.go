@@ -12,8 +12,12 @@ import (
 // TestRestartConcurrentNoPanic 验证 5 个 goroutine 并发调用 Restart 不会
 // panic（nil-pointer / 双重 Start），且结束后 Manager 仍可正常 Stop。
 func TestRestartConcurrentNoPanic(t *testing.T) {
+	// 端口自动避让会把实际端口写入数据目录的状态文件：
+	// 隔离到临时目录，避免测试污染仓库/可执行文件旁的 data/
+	t.Setenv("SYNCMEDIA_DATA_DIR", t.TempDir())
+
 	cfg := config.Default()
-	cfg.Server.Port = 0    // OS 随机端口
+	cfg.Server.Port = 0    // 0=未设定，走自动避让
 	cfg.Server.TLS = false
 	cfg.Tunnel.Type = "none"
 	cfg.Web.Enabled = false

@@ -3,10 +3,13 @@ package syncplay
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +24,7 @@ type Server struct {
 	gmConfig *gmtls.Config // nil = no TLS support
 	features  ServerFeatures
 	password  string // MD5 hash, empty = no password
+	bind      string // 监听地址，空=全接口
 	wg        sync.WaitGroup
 	mu        sync.Mutex
 	closing   bool
@@ -31,6 +35,7 @@ type Server struct {
 type ServerConfig struct {
 	Port     int
 	Password string
+	Bind     string // 监听地址；空=全接口（:port）
 	GMConfig *gmtls.Config
 	Logger   *log.Logger
 }
@@ -44,6 +49,7 @@ func NewServer(cfg ServerConfig) *Server {
 		gmConfig: cfg.GMConfig,
 		features:  DefaultServerFeatures(),
 		password:  cfg.Password,
+		bind:      cfg.Bind,
 		conns:     make(map[net.Conn]struct{}),
 		logger:    cfg.Logger,
 	}
@@ -52,6 +58,9 @@ func NewServer(cfg ServerConfig) *Server {
 // Listen starts the TCP listener on the given port.
 func (s *Server) Listen(port int) error {
 	addr := fmt.Sprintf(":%d", port)
+	if s.bind != "" {
+		addr = net.JoinHostPort(s.bind, strconv.Itoa(port))
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("监听 %s: %w", addr, err)
@@ -145,20 +154,25 @@ func (s *Server) handleConnection(conn net.Conn) {
 	client := &Client{
 		conn:          conn,
 		server:        s,
-		reader:        bufio.NewReader(conn),
+		reader:        bufio.NewReaderSize(conn, MaxMessageLength+1),
 		ping:          newPingService(),
 		lastUpdatedOn: time.Now(),
 		done:          make(chan struct{}),
 	}
+	// 统一清理入口：任何返回路径（dispatch false、读错误、超长行）都保证
+	// 执行 cleanup，杜绝 stateTicker goroutine 泄漏与 watcher/房间残留。
+	defer client.cleanup()
 
 	s.logger.Printf("新连接: %s", conn.RemoteAddr())
 
 	// Read lines and dispatch messages
 	for {
 		conn.SetReadDeadline(time.Now().Add(time.Duration(ProtocolTimeout * float64(time.Second))))
-		line, err := client.reader.ReadBytes('\n')
+		line, err := readLineBounded(client.reader, MaxMessageLength)
 		if err != nil {
-			if err != io.EOF {
+			if errors.Is(err, errLineTooLong) {
+				s.logger.Printf("消息超过 %d 字节 %s，断开连接", MaxMessageLength, conn.RemoteAddr())
+			} else if err != io.EOF {
 				s.logger.Printf("读取错误 %s: %v", conn.RemoteAddr(), err)
 			}
 			client.cleanup()
@@ -181,6 +195,28 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if !client.dispatch(msg) {
 			// dispatch returned false = connection should close
 			return
+		}
+	}
+}
+
+// errLineTooLong 表示单行消息超过 MaxMessageLength，连接应被断开。
+var errLineTooLong = errors.New("line too long")
+
+// readLineBounded 读取一行（\n 结尾）。与 ReadBytes 不同，它对行长度设上限：
+// 超过 maxLen 返回 errLineTooLong，防止恶意客户端用无换行的超长行耗尽内存。
+func readLineBounded(r *bufio.Reader, maxLen int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(line)+len(frag) > maxLen {
+			return nil, errLineTooLong
+		}
+		line = append(line, frag...)
+		if err == nil {
+			return line, nil
+		}
+		if err != bufio.ErrBufferFull {
+			return line, err
 		}
 	}
 }
@@ -249,18 +285,25 @@ func (c *Client) handleTLS(msg *TLSMsg) {
 		c.send(Message{TLS: &TLSMsg{StartTLS: "false"}})
 		return
 	}
-	// Agree to TLS upgrade
-	c.send(Message{TLS: &TLSMsg{StartTLS: "true"}})
-
-	// Upgrade the connection to TLS
+	// 升级前若 bufio 已预读数据（客户端在握手确认前就发送了后续字节），
+	// 无法安全交给 TLS 层，拒绝升级
+	if c.reader.Buffered() > 0 {
+		c.send(Message{TLS: &TLSMsg{StartTLS: "false"}})
+		return
+	}
+	// 握手单独设置读/写超时（30s），不复用读循环 SetReadDeadline 的剩余窗口，
+	// 慢网络下不会在握手中途被陈旧 deadline 掐断
+	c.conn.SetDeadline(time.Now().Add(30 * time.Second))
 	tlsConn := gmtls.Server(c.conn, c.server.gmConfig)
 	if err := tlsConn.Handshake(); err != nil {
+		c.conn.SetDeadline(time.Time{})
 		c.server.logger.Printf("TLS 握手失败 %s: %v", c.conn.RemoteAddr(), err)
 		c.cleanup()
 		return
 	}
+	c.conn.SetDeadline(time.Time{}) // 清除握手 deadline，读循环会重新设置读超时
 	c.conn = tlsConn
-	c.reader = bufio.NewReader(tlsConn)
+	c.reader = bufio.NewReaderSize(tlsConn, MaxMessageLength+1)
 	c.server.logger.Printf("TLS 已升级 %s", c.conn.RemoteAddr())
 }
 
@@ -472,9 +515,19 @@ func (c *Client) sendLeftMessage() {
 
 // handleSet processes Set commands from the client.
 func (c *Client) handleSet(set *SetMsg) {
+	// 清理后的连接（c.closed=true，ticker 超时踢人等）不再处理在途消息：
+	// 否则 moveWatcher 会把已断开 watcher 重新加回房间，且无人再清理。
+	if c.closed.Load() {
+		return
+	}
 	if set.Room != nil {
 		// Room switch
 		roomName := set.Room.Name
+		if strings.TrimSpace(roomName) == "" {
+			// 与 Hello 同样的校验：空白房间名拒绝，防止进入空名房间
+			c.dropWithError("hello-server-error")
+			return
+		}
 		c.sendLeftMessage()
 		c.server.rooms.moveWatcher(c.watcher, roomName)
 		c.sendRoomSwitchMessage()
@@ -676,8 +729,8 @@ func (c *Client) dropWithError(errorKey string) {
 
 func (c *Client) cleanup() {
 	c.closeMu.Lock()
-	defer c.closeMu.Unlock()
 	if c.closed.Load() {
+		c.closeMu.Unlock()
 		return
 	}
 	c.closed.Store(true)
@@ -686,7 +739,11 @@ func (c *Client) cleanup() {
 	if c.stateTicker != nil {
 		c.stateTicker.Stop()
 	}
+	c.closeMu.Unlock()
 
+	// 广播 left 消息放到 closeMu 之外：网络写可能阻塞（每对端 10s 写超时），
+	// 若持锁会拖慢 Server.Close 的 wg.Wait。c.closed 已在锁内置位，
+	// 后续 addWatcher 的 closed 检查会拒绝把本 watcher 加回房间。
 	if c.watcher != nil {
 		c.sendLeftMessage()
 		c.server.rooms.removeWatcher(c.watcher)

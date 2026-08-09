@@ -90,6 +90,9 @@ func (r *Room) setPaused(paused bool, setBy *Watcher) {
 }
 
 func (r *Room) setPosition(pos float64, setBy *Watcher) {
+	if pos < 0 {
+		pos = 0 // 负 position 钳制为 0，防止进入外推/广播
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.position = pos
@@ -101,6 +104,11 @@ func (r *Room) setPosition(pos float64, setBy *Watcher) {
 }
 
 func (r *Room) addWatcher(w *Watcher) {
+	// 已清理的 client（c.closed=true）不得被在途 handleSet 的 moveWatcher
+	// 重新加回房间：清理后不会再有任何机会移除，会留下幽灵 watcher。
+	if w.client != nil && w.client.closed.Load() {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// Sync new watcher to room position
@@ -159,6 +167,10 @@ func (rm *RoomManager) getRoom(name string) *Room {
 }
 
 func (rm *RoomManager) moveWatcher(w *Watcher, roomName string) {
+	// 拒绝已断开 client 的 watcher 迁移（见 addWatcher 的说明）
+	if w.client != nil && w.client.closed.Load() {
+		return
+	}
 	rm.mu.Lock()
 	w.mu.Lock()
 	oldRoom := w.room
@@ -292,8 +304,13 @@ func newWatcher(name string, client *Client) *Watcher {
 }
 
 func (w *Watcher) setFile(f *FileInfo) {
-	if f != nil && f.Name != "" {
-		f.Name = truncateText(f.Name, MaxFilenameLength)
+	if f != nil {
+		if f.Name != "" {
+			f.Name = truncateText(f.Name, MaxFilenameLength)
+		}
+		if f.Duration < 0 {
+			f.Duration = 0 // 负 duration 钳制为 0
+		}
 	}
 	w.mu.Lock()
 	w.file = f
@@ -301,6 +318,9 @@ func (w *Watcher) setFile(f *FileInfo) {
 }
 
 func (w *Watcher) setPosition(pos float64) {
+	if pos < 0 {
+		pos = 0 // 负 position 钳制为 0，防止进入外推/广播
+	}
 	w.mu.Lock()
 	w.position = pos
 	w.mu.Unlock()

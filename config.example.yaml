@@ -1,0 +1,31 @@
+# ============================================
+#  SyncMedia 配置文件
+#  每个设置都有默认值，不写就按默认运行。
+#  想改哪个，把对应行取消注释、改成你的值即可。
+#  配置优先级：默认值 < 本文件 < 环境变量 < 命令行参数
+# ============================================
+
+# ─────────── 服务器（朋友连接进来用） ───────────
+# server.port: 8999            # Syncplay 连接端口；不写=自动（默认试 8999，被占自动避让并记住）
+# server.tls: true             # 是否启用加密（默认开）
+# server.password: ""          # 连接密码；留空=无需密码
+# server.bind: ""              # 监听地址；默认全接口（IPv4+IPv6）
+
+# ─────────── 隧道（让外网朋友能连到你） ───────────
+# tunnel.type: bore            # bore（默认免配置）| frp（自建服务器）| none（仅局域网）
+# tunnel.bore.relay: "bore.pub"  # bore 中继地址
+# tunnel.bore.secret: ""       # bore 共享密钥（如需要）
+# tunnel.frp.server: ""        # frp 服务器地址（type=frp 时必填）
+# tunnel.frp.port: 7000        # frp 服务器端口
+# tunnel.frp.token: ""         # frp 认证 token
+# tunnel.frp.remote_port: 0    # frp 公网端口；0=自动
+
+# ─────────── 管理界面（WebUI） ───────────
+# web.port: 8080               # WebUI 端口；默认 8080，被占自动避让
+# web.bind: "127.0.0.1"        # 绑定地址；默认仅本机，0.0.0.0 时外网可访问（必须配 token）
+# web.token: ""                # 访问令牌；非本机绑定时必填
+
+# ─────────── 网络（特殊场景才需要） ───────────
+# network.proxy_url: ""        # 代理地址，如 "socks5://127.0.0.1:1080"
+# network.bind_interface: ""   # 绑定网卡绕过 VPN（如 wlan0，需 root）
+# network.no_proxy: false      # 清除系统代理环境变量

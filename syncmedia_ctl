@@ -1,0 +1,148 @@
+#!/bin/sh
+# SyncMedia 服务控制脚本
+# 用法：syncmedia_ctl <命令>
+#   命令：start | stop | restart | status | logs | help
+
+set -u
+
+# 定位脚本自身所在目录（安装后即 ~/syncmedia/）
+DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN="$DIR/syncmedia"
+LOG_DIR="$DIR/logs"
+DATA_DIR="$DIR/data"
+PID_FILE="$DATA_DIR/syncmedia.pid"
+
+# ---------- 帮助 ----------
+usage() {
+    cat <<EOF
+syncmedia_ctl - SyncMedia 服务控制脚本
+
+用法：$(basename "$0") <命令>
+
+命令：
+  start     启动 SyncMedia 服务（后台运行）
+  stop      停止服务
+  restart   重启服务
+  status    查看服务状态（含实际端口）
+  logs      实时查看日志（Ctrl+C 退出）
+  help      显示本帮助
+
+数据目录：$DATA_DIR
+日志文件：$LOG_DIR/syncmedia.log
+EOF
+}
+
+# ---------- 判断是否在运行 ----------
+# 成功时设置全局变量 PID
+is_running() {
+    PID=""
+    [ -f "$PID_FILE" ] || return 1
+    PID="$(cat "$PID_FILE" 2>/dev/null)"
+    [ -n "$PID" ] || return 1
+    kill -0 "$PID" 2>/dev/null
+}
+
+# ---------- start ----------
+start() {
+    if [ ! -x "$BIN" ]; then
+        echo "错误：未找到服务端二进制 $BIN"
+        echo "请确认 syncmedia_ctl 与 syncmedia 位于同一目录"
+        return 1
+    fi
+    if is_running; then
+        echo "SyncMedia 已在运行（PID $PID）"
+        return 0
+    fi
+    mkdir -p "$LOG_DIR" "$DATA_DIR"
+    nohup "$BIN" start >> "$LOG_DIR/syncmedia.log" 2>&1 &
+    echo $! > "$PID_FILE"
+    sleep 1
+    if is_running; then
+        echo "SyncMedia 已启动（PID $PID）"
+        echo "日志文件：$LOG_DIR/syncmedia.log"
+    else
+        echo "启动失败，请查看日志：$LOG_DIR/syncmedia.log"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+}
+
+# ---------- stop ----------
+stop() {
+    if ! is_running; then
+        echo "SyncMedia 未在运行"
+        rm -f "$PID_FILE"
+        return 0
+    fi
+    echo "正在停止 SyncMedia（PID $PID）..."
+    kill "$PID" 2>/dev/null
+    # 等待进程退出，最多 10 秒
+    i=0
+    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 10 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "进程未在 10 秒内退出，发送强制终止信号"
+        kill -9 "$PID" 2>/dev/null
+    fi
+    rm -f "$PID_FILE"
+    echo "SyncMedia 已停止"
+}
+
+# ---------- status ----------
+status() {
+    if is_running; then
+        echo "运行中（PID $PID）"
+    else
+        echo "未运行"
+        rm -f "$PID_FILE"
+    fi
+    # 端口信息：由端口避让功能写入 data/ports.json，可能不存在，容错处理
+    if [ -f "$DATA_DIR/ports.json" ]; then
+        PORTS="$(cat "$DATA_DIR/ports.json" 2>/dev/null)"
+        if [ -n "$PORTS" ]; then
+            echo "端口信息：$PORTS"
+        fi
+    fi
+    echo "日志文件：$LOG_DIR/syncmedia.log"
+}
+
+# ---------- logs ----------
+logs() {
+    if [ ! -f "$LOG_DIR/syncmedia.log" ]; then
+        echo "日志文件不存在，请先启动服务：$(basename "$0") start"
+        return 1
+    fi
+    tail -f "$LOG_DIR/syncmedia.log"
+}
+
+# ---------- 主入口 ----------
+case "${1:-}" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        start
+        ;;
+    status)
+        status
+        ;;
+    logs)
+        logs
+        ;;
+    help|-h|--help|"")
+        usage
+        ;;
+    *)
+        echo "未知命令：$1"
+        usage
+        exit 1
+        ;;
+esac
+
+exit 0

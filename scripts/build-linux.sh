@@ -2,7 +2,7 @@
 set -e
 
 # SyncMedia Linux 构建脚本
-# 产出：dist/linux/ 下两个 tar.gz（amd64 + arm64），各含二进制 + start.sh
+# 产出：dist/linux/ 下两个 tar.gz（amd64 + arm64），各含二进制 + 安装/控制脚本
 
 export PATH="/root/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.25.0.linux-arm64/bin:$PATH"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,9 +20,9 @@ build_arch() {
         -o "$OUTDIR/syncmedia" \
         "$PROJECT_ROOT/cmd/syncmedia/"
 
-    cp "$PROJECT_ROOT/start.sh" "$OUTDIR/"
-    cp "$PROJECT_ROOT/stop.sh" "$OUTDIR/"
-    chmod +x "$OUTDIR/syncmedia" "$OUTDIR/start.sh" "$OUTDIR/stop.sh"
+    cp "$PROJECT_ROOT/syncmedia_ctl" "$PROJECT_ROOT/install.sh" "$PROJECT_ROOT/uninstall.sh" "$OUTDIR/"
+    cp "$PROJECT_ROOT/config.example.yaml" "$PROJECT_ROOT/README.md" "$OUTDIR/"
+    chmod +x "$OUTDIR/syncmedia" "$OUTDIR/syncmedia_ctl" "$OUTDIR/install.sh" "$OUTDIR/uninstall.sh"
 
     cd "$PROJECT_ROOT/dist/linux"
     tar -czf "syncmedia-linux-$ARCH.tar.gz" "$ARCH/"
@@ -35,4 +35,4 @@ build_arch arm64
 echo ""
 echo "=== 完成 ==="
 echo "  产物在 dist/linux/"
-echo "  解压后直接运行: ./syncmedia start  或  ./start.sh"
+echo "  解压后直接运行: ./syncmedia start  或  ./syncmedia_ctl start"

@@ -168,6 +168,10 @@ func (c *Client) handleState(state *StateMsg) {
 	if state == nil {
 		return
 	}
+	// 清理后的连接不处理在途消息（见 handleSet 的说明）
+	if c.closed.Load() {
+		return
+	}
 
 	// Extract playstate. position stays nil when the client sent no
 	// playstate at all — a real position of 0 is a legitimate seek target.

@@ -16,7 +16,7 @@ func TestUsageListsAllFlags(t *testing.T) {
 
 	flags := []string{
 		"config", "port", "web-port", "no-tls", "tunnel",
-		"bore-binary", "frp-server", "proxy", "bind-interface", "no-proxy",
+		"frp-server", "proxy", "bind-interface", "no-proxy",
 	}
 	for _, name := range flags {
 		re := regexp.MustCompile(`(?m)^\s+--` + regexp.QuoteMeta(name) + `(\s|$)`)

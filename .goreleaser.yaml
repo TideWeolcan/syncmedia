@@ -11,7 +11,6 @@ builds:
     binary: syncmedia
     goos:
       - linux
-      - windows
     goarch:
       - amd64
       - arm64
@@ -27,14 +26,12 @@ archives:
   - id: syncmedia
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format: tar.gz
-    format_overrides:
-      - goos: windows
-        format: zip
     files:
-      - config.yaml
+      - config.example.yaml
       - README.md
-      - start.sh
-      - stop.sh
+      - install.sh
+      - uninstall.sh
+      - syncmedia_ctl
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

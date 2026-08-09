@@ -20,7 +20,7 @@ func DialContext(ctx context.Context, network, addr, proxyURL, bindInterface str
 	}
 	ch := make(chan dialResult, 1)
 	go func() {
-		c, e := dialOnce(network, addr, proxyURL, bindInterface)
+		c, e := dialOnce(ctx, network, addr, proxyURL, bindInterface)
 		ch <- dialResult{c, e}
 	}()
 	select {
@@ -38,8 +38,10 @@ func DialContext(ctx context.Context, network, addr, proxyURL, bindInterface str
 	}
 }
 
-// dialOnce 执行一次实际拨号（代理或直连），不处理 context 超时。
-func dialOnce(network, addr, proxyURL, bindInterface string) (net.Conn, error) {
+// dialOnce 执行一次实际拨号（代理或直连）。整体受 ctx 约束：底层拨号使用
+// DialContext，代理握手阶段设 deadline（ctx 有 deadline 取更早者，否则 10s），
+// 避免 ctx 超时后握手 goroutine 永久阻塞泄漏。
+func dialOnce(ctx context.Context, network, addr, proxyURL, bindInterface string) (net.Conn, error) {
 	// 解析代理
 	if proxyURL != "" {
 		u, err := url.Parse(proxyURL)
@@ -58,6 +60,13 @@ func dialOnce(network, addr, proxyURL, bindInterface string) (net.Conn, error) {
 			if err != nil {
 				return nil, fmt.Errorf("创建 SOCKS5 拨号器失败: %w", err)
 			}
+			// SOCKS5 握手（greeting/auth/CONNECT 请求）在 Dial 内部完成：
+			// 优先使用 ctx 感知的 DialContext，ctx 取消时握手立即中止而非挂死
+			if cd, ok := dialer.(interface {
+				DialContext(context.Context, string, string) (net.Conn, error)
+			}); ok {
+				return cd.DialContext(ctx, network, addr)
+			}
 			conn, err := dialer.Dial(network, addr)
 			if err != nil {
 				return nil, err
@@ -65,7 +74,7 @@ func dialOnce(network, addr, proxyURL, bindInterface string) (net.Conn, error) {
 			return conn, nil
 
 		case "http", "https":
-			return httpConnect(u.Host, addr, bindInterface)
+			return httpConnect(ctx, u.Host, addr, bindInterface)
 
 		default:
 			return nil, fmt.Errorf("不支持的代理类型: %s", u.Scheme)
@@ -77,23 +86,32 @@ func dialOnce(network, addr, proxyURL, bindInterface string) (net.Conn, error) {
 	if bindInterface != "" {
 		dialer.Control = bindInterfaceControl(bindInterface)
 	}
-	conn, err := dialer.Dial(network, addr)
-	if err != nil {
-		return nil, err
+	return dialer.DialContext(ctx, network, addr)
+}
+
+// handshakeDeadline 返回握手阶段截止时间：ctx 有 deadline 时取更早者，否则 10s。
+func handshakeDeadline(ctx context.Context) time.Time {
+	d := time.Now().Add(10 * time.Second)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(d) {
+		return dl
 	}
-	return conn, nil
+	return d
 }
 
 // httpConnect 通过 HTTP CONNECT 代理拨号。
-func httpConnect(proxyHost, targetAddr, bindInterface string) (net.Conn, error) {
+func httpConnect(ctx context.Context, proxyHost, targetAddr, bindInterface string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	if bindInterface != "" {
 		dialer.Control = bindInterfaceControl(bindInterface)
 	}
-	conn, err := dialer.Dial("tcp", proxyHost)
+	conn, err := dialer.DialContext(ctx, "tcp", proxyHost)
 	if err != nil {
 		return nil, fmt.Errorf("连接代理失败: %w", err)
 	}
+
+	// CONNECT 握手（写请求 + 读响应）设 deadline：否则 ctx 取消后
+	// ReadResponse 可能永久阻塞，拨号 goroutine 泄漏
+	conn.SetDeadline(handshakeDeadline(ctx))
 
 	// 发送 CONNECT 请求
 	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", targetAddr, targetAddr)
@@ -116,5 +134,6 @@ func httpConnect(proxyHost, targetAddr, bindInterface string) (net.Conn, error) 
 		return nil, fmt.Errorf("代理拒绝连接: %s", resp.Status)
 	}
 
+	conn.SetDeadline(time.Time{}) // 握手完成，清除 deadline 供数据面使用
 	return conn, nil
 }

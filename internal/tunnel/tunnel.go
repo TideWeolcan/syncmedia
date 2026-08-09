@@ -61,7 +61,8 @@ func (m *Manager) AddTunnel(t Tunnel) {
 }
 
 // Start 依次尝试所有注册的隧道，第一个 Start + WaitReady 都成功的成为活跃隧道。
-func (m *Manager) Start(localPort int) error {
+// ctx 约束整体等待：ctx 取消（如重启换代）时立即中止等待，不阻塞在 WaitReady 上。
+func (m *Manager) Start(ctx context.Context, localPort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -79,9 +80,9 @@ func (m *Manager) Start(localPort int) error {
 			continue
 		}
 
-		// 等待隧道就绪（30 秒超时）
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		addr, err := t.WaitReady(ctx)
+		// 等待隧道就绪（ctx 未取消时最长 30 秒）
+		waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		addr, err := t.WaitReady(waitCtx)
 		cancel()
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s 就绪失败: %v", t.Name(), err))

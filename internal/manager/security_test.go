@@ -129,6 +129,7 @@ func TestWebAuthWithToken(t *testing.T) {
 	do := func(t *testing.T, setup func(*http.Request)) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		req.Host = "127.0.0.1:8080" // 回环绑定的 Host 校验白名单
 		if setup != nil {
 			setup(req)
 		}
@@ -179,10 +180,46 @@ func TestWebNoTokenNoAuth(t *testing.T) {
 		t.Fatalf("NewWebServer err = %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.Host = "127.0.0.1" // 回环绑定的 Host 校验白名单
 	rec := httptest.NewRecorder()
 	ws.server.Handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("Token 为空时无凭据 GET /api/status = %d, want %d（本机默认行为不变）", rec.Code, http.StatusOK)
+	}
+}
+
+// TestWebRejectsForeignHost：回环绑定 + 无 token 时，非回环 Host 头必须被
+// 拒绝（DNS rebinding 防护：攻击者域名解析到 127.0.0.1 也无法读写 API）。
+func TestWebRejectsForeignHost(t *testing.T) {
+	mgr := NewManager(restartSafeCfg(), discardLogger())
+	ws, err := buildWebServer(config.WebConfig{Port: 8080}, mgr, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWebServer err = %v", err)
+	}
+
+	for _, host := range []string{"evil.example.com", "127.0.0.1.evil.com", "localhost.attacker.io"} {
+		t.Run(host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
+			req.Host = host
+			rec := httptest.NewRecorder()
+			ws.server.Handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("Host=%q POST /api/restart = %d, want %d（DNS rebinding 防护）", host, rec.Code, http.StatusForbidden)
+			}
+		})
+	}
+
+	// 回环 Host 白名单（带端口/不带端口）必须放行
+	for _, host := range []string{"127.0.0.1", "127.0.0.1:8080", "localhost:8080", "localhost"} {
+		t.Run("allow "+host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+			req.Host = host
+			rec := httptest.NewRecorder()
+			ws.server.Handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("Host=%q GET /api/status = %d, want %d", host, rec.Code, http.StatusOK)
+			}
+		})
 	}
 }
 
@@ -274,6 +311,11 @@ func TestRedactProxyURL(t *testing.T) {
 		// I1：无 scheme 时 url.Parse 把 "user:" 当 scheme、u.User 为 nil，
 		// 密码不可被原样放行——含 @ 且未捕获 userinfo 必须全遮。
 		{"无 scheme 含密码", "user:pw@host:port", "<redacted>"},
+		// query 中的敏感参数（token/password/secret 等）一并掩码
+		{"query 含 token", "http://u:p@proxy.example:8080/?token=abc123&mode=fast", "http://u:xxxxx@proxy.example:8080/?mode=fast&token=xxxxx"},
+		{"query 含 password", "socks5://127.0.0.1:1080?password=sekret&key=deadbeef", "socks5://127.0.0.1:1080?key=xxxxx&password=xxxxx"},
+		{"query 大小写不敏感", "socks5://h:1080?TOKEN=abc", "socks5://h:1080?TOKEN=xxxxx"},
+		{"query 无敏感参数", "socks5://h:1080?mode=fast&port=1", "socks5://h:1080?mode=fast&port=1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	boreControlPort = 7835
-	boreTimeout     = 3 * time.Second
+	boreControlPort        = 7835
+	boreTimeout            = 3 * time.Second
+	boreControlReadTimeout = 30 * time.Second // 控制连接读超时：静默丢包时触发重连
 )
 
 // BoreNativeClient 用 Go 原生实现 bore 协议，不依赖外部二进制。
@@ -332,6 +333,9 @@ func (b *BoreNativeClient) controlLoop(conn net.Conn) {
 		default:
 		}
 
+		// 中继静默丢包（无 RST/FIN）时 readMsg 会永久阻塞：设读超时，
+		// 超过该时长无任何消息即视为控制连接失效，触发重连并清空地址。
+		conn.SetReadDeadline(time.Now().Add(boreControlReadTimeout))
 		msg, err := b.readMsg(conn)
 		if err != nil {
 			if b.isClosed() {

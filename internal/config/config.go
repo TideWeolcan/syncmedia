@@ -26,9 +26,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port     int    `yaml:"port"`
+	Port     int    `yaml:"port"`  // 0=未设定（走自动避让）
 	TLS      bool   `yaml:"tls"`
 	Password string `yaml:"password"`
+	Bind     string `yaml:"bind"` // 监听地址；空=全接口（IPv4+IPv6），可指定 IP 只绑内网/IPv6
 }
 
 type TunnelConfig struct {
@@ -39,7 +40,7 @@ type TunnelConfig struct {
 
 type BoreCfg struct {
 	Relay  string `yaml:"relay"`
-	Binary string `yaml:"binary"`
+	Secret string `yaml:"secret"` // 共享密钥（如中继需要）
 }
 
 type FRPCfg struct {
@@ -47,7 +48,6 @@ type FRPCfg struct {
 	Port       int    `yaml:"port"`
 	Token      string `yaml:"token"`
 	RemotePort int    `yaml:"remote_port"`
-	Binary     string `yaml:"binary"`
 }
 
 type WebConfig struct {
@@ -58,24 +58,25 @@ type WebConfig struct {
 }
 
 // Default returns the default configuration.
+// 端口默认为 0（未设定）：启动时自动尝试首选端口（Syncplay 8999 / WebUI 8080），
+// 被占用则自动避让并记住结果。
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port:    8999,
-			TLS:     true,
+			Port: 0,
+			TLS:  true,
 		},
 		Tunnel: TunnelConfig{
 			Type: "bore",
 			Bore: BoreCfg{
-				Relay:  "bore.pub",
-				Binary: "",
+				Relay: "bore.pub",
 			},
 			FRP: FRPCfg{
 				Port: 7000,
 			},
 		},
 		Web: WebConfig{
-			Port:    8080,
+			Port:    0,
 			Enabled: true,
 			Bind:    "127.0.0.1",
 		},
@@ -105,7 +106,22 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	// 校验合法性（环境变量/文件均可引入非法值）
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// Validate 检查配置合法性。目前校验隧道类型，非法值显式报错而不是静默回落。
+func (cfg *Config) Validate() error {
+	switch cfg.Tunnel.Type {
+	case "bore", "frp", "none":
+		return nil
+	default:
+		return fmt.Errorf("tunnel.type 无效: %q（可选值: bore | frp | none）", cfg.Tunnel.Type)
+	}
 }
 
 // applyEnv overrides config values from SYNCMEDIA_* environment variables.
@@ -167,7 +183,7 @@ func applyEnv(cfg *Config) error {
 }
 
 // ApplyCLIOverrides applies command-line flag overrides onto the config.
-func (cfg *Config) ApplyCLIOverrides(serverPort, webPort int, tlsEnabled *bool, tunnelType, boreBinary, frpServer, proxyURL, bindInterface string, noProxy *bool) {
+func (cfg *Config) ApplyCLIOverrides(serverPort, webPort int, tlsEnabled *bool, tunnelType, frpServer, proxyURL, bindInterface string, noProxy *bool) {
 	if serverPort > 0 {
 		cfg.Server.Port = serverPort
 	}
@@ -179,9 +195,6 @@ func (cfg *Config) ApplyCLIOverrides(serverPort, webPort int, tlsEnabled *bool, 
 	}
 	if tunnelType != "" {
 		cfg.Tunnel.Type = tunnelType
-	}
-	if boreBinary != "" {
-		cfg.Tunnel.Bore.Binary = boreBinary
 	}
 	if frpServer != "" {
 		cfg.Tunnel.FRP.Server = frpServer
