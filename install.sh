@@ -19,8 +19,10 @@ VERSION=""          # 空 = 自动获取最新版
 USE_SYSTEMD=0       # 0 = 不配置 systemd
 INSTALL_DIR="$HOME/syncmedia"
 REPO="TideWeolcan/syncmedia"
-BASE_URL="https://github.com/${REPO}/releases/download"
-API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+# 下载基址，默认 GitHub。SYNCMEDIA_RELEASE_BASE 仅用于内部测试
+# （可指向本地假服务器模拟发布页），不在文档中对外宣传
+RELEASE_BASE="${SYNCMEDIA_RELEASE_BASE:-https://github.com}"
+BASE_URL="${RELEASE_BASE}/${REPO}/releases/download"
 PKG_MGR=""
 
 # ---------- 帮助 ----------
@@ -185,30 +187,75 @@ download() {
     fi
 }
 
-fetch_stdout() {
-    # $1: URL，内容输出到 stdout
+# ---------- 通用重试 ----------
+# 用法：retry <最多尝试次数> <操作描述> <命令及其参数...>
+# 失败后按递增间隔（1s、2s...）重试，全部失败返回 1
+# 进度提示输出到 stderr，避免污染被重试命令的 stdout
+retry() {
+    MAX_ATTEMPTS="$1"
+    LABEL="$2"
+    shift 2
+    N=1
+    while [ "$N" -le "$MAX_ATTEMPTS" ]; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$N" -lt "$MAX_ATTEMPTS" ]; then
+            echo "$LABEL 失败，正在重试（第 $((N+1))/$MAX_ATTEMPTS 次）..." >&2
+            sleep "$N"
+            N=$((N+1))
+        else
+            return 1
+        fi
+    done
+    return 1
+}
+
+# ---------- 获取最新版本号（走 302 重定向解析，不用 GitHub API，避免限流） ----------
+# 原理：https://github.com/<owner>/<repo>/releases/latest 会 302 跳转到
+# .../releases/tag/vX.Y.Z，读 Location 头即可拿到版本号，全程不经过 API
+fetch_latest_location() {
+    # $1: URL，输出其 302 重定向目标（Location 头，一行）；
+    #     网络错误或 HTTP 4xx/5xx 时返回非零，便于上层重试
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1"
+        curl -fs -o /dev/null -w '%{redirect_url}' "$1"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O - "$1"
+        # wget 会跟随重定向去请求目标页，目标页 4xx 也会让 wget 退出码非零；
+        # 因此只要抓到了 Location 头就算成功（我们要的只是这个头）
+        LOCATION_OUT="$(wget -S -O /dev/null "$1" 2>&1)"
+        WGET_STATUS=$?
+        LOCATION_LINE="$(printf '%s\n' "$LOCATION_OUT" | grep -i '^ *Location:' | sed 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//' | tr -d '\r' | tail -n 1)"
+        if [ -n "$LOCATION_LINE" ]; then
+            printf '%s\n' "$LOCATION_LINE"
+            return 0
+        fi
+        return "$WGET_STATUS"
     else
-        echo "错误：需要 curl 或 wget 才能下载"
+        echo "错误：需要 curl 或 wget 才能获取版本信息"
         return 1
     fi
 }
 
-# ---------- 获取最新版本号（不依赖 jq） ----------
+extract_version_from_location() {
+    # $1: Location 字符串（…/releases/tag/vX.Y.Z），输出其中的版本号
+    printf '%s\n' "$1" | sed -n 's#.*/releases/tag/\([^/[:space:]]*\).*#\1#p' | head -n 1
+}
+
 get_latest_version() {
     echo "正在获取最新版本..."
-    RESP="$(fetch_stdout "$API_URL")" || {
-        echo "错误：无法访问 GitHub API（$API_URL）"
-        echo "请检查网络连接，或使用 --version 手动指定版本：install.sh --version vX.Y.Z"
+    LATEST_URL="${RELEASE_BASE}/${REPO}/releases/latest"
+    LOCATION="$(retry 3 "获取版本号" fetch_latest_location "$LATEST_URL")" || {
+        echo ""
+        echo "错误：没能获取到最新版本号。"
+        echo "可能是网络不稳定，请检查网络后重新运行本脚本；"
+        echo "或用 --version 手动指定版本：install.sh --version vX.Y.Z"
         exit 1
     }
-    VERSION="$(printf '%s\n' "$RESP" | grep '"tag_name"' | head -n 1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+    VERSION="$(extract_version_from_location "$LOCATION")"
     if [ -z "$VERSION" ]; then
-        echo "错误：无法从 GitHub API 解析出版本号"
-        echo "请稍后重试，或使用 --version 手动指定版本：install.sh --version vX.Y.Z"
+        echo ""
+        echo "错误：拿到了跳转地址，但没从中识别出版本号。"
+        echo "请稍后重试，或用 --version 手动指定版本：install.sh --version vX.Y.Z"
         exit 1
     fi
     echo "最新版本：$VERSION"
@@ -222,7 +269,7 @@ verify_checksum() {
     CHKSUMS="syncmedia_${VERSION}_checksums.txt"
 
     echo "正在下载校验文件..."
-    if ! download "${BASE_URL}/${VERSION}/${CHKSUMS}" "$TMPD/$CHKSUMS"; then
+    if ! retry 3 "下载校验文件" download "${BASE_URL}/${VERSION}/${CHKSUMS}" "$TMPD/$CHKSUMS"; then
         echo "警告：校验文件下载失败，跳过完整性校验"
         return 0
     fi
@@ -385,9 +432,11 @@ echo ""
 
 # 下载
 echo "正在下载：$URL"
-if ! download "$URL" "$TMPDIR/$TARBALL"; then
-    echo "错误：下载失败，请检查网络连接后重试"
-    echo "  也可手动下载：$URL"
+if ! retry 3 "下载安装包" download "$URL" "$TMPDIR/$TARBALL"; then
+    echo ""
+    echo "错误：安装包下载失败。"
+    echo "可能是网络不稳定，请检查网络后重新运行本脚本。"
+    echo "也可以手动下载后解压到 $INSTALL_DIR 使用：$URL"
     exit 1
 fi
 echo "下载完成：$TARBALL ($(ls -lh "$TMPDIR/$TARBALL" | awk '{print $5}'))"
