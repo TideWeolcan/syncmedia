@@ -266,7 +266,9 @@ verify_checksum() {
     # $1: 临时目录  $2: tar 包文件名
     TMPD="$1"
     TARBALL="$2"
-    CHKSUMS="syncmedia_${VERSION}_checksums.txt"
+    # goreleaser 的 {{.Version}} 不含 v 前缀（如 2.0.0），tag 才带 v
+    ASSET_VER="${VERSION#v}"
+    CHKSUMS="syncmedia_${ASSET_VER}_checksums.txt"
 
     echo "正在下载校验文件..."
     if ! retry 3 "下载校验文件" download "${BASE_URL}/${VERSION}/${CHKSUMS}" "$TMPD/$CHKSUMS"; then
@@ -417,7 +419,9 @@ else
     esac
 fi
 
-TARBALL="syncmedia_${VERSION}_linux_${GOARCH}.tar.gz"
+# 资产文件名用无 v 前缀的版本号（goreleaser {{.Version}} 不含 v，如 2.0.0）
+ASSET_VER="${VERSION#v}"
+TARBALL="syncmedia_${ASSET_VER}_linux_${GOARCH}.tar.gz"
 URL="${BASE_URL}/${VERSION}/${TARBALL}"
 
 # 创建临时目录并设置清理
