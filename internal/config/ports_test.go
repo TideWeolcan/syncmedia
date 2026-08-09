@@ -6,10 +6,13 @@ import (
 	"testing"
 )
 
-// occupyPort 监听一个临时端口并保持占用，返回该端口；测试结束自动释放。
+// occupyPort 在 IPv4 通配地址（0.0.0.0）上监听一个临时端口并保持占用，返回该端口；测试结束自动释放。
+// 与 PortAvailable 的探测地址（0.0.0.0:port）一致，跨平台地代表"端口被占用"：
+// Linux 上 0.0.0.0 与 127.0.0.1 绑定互相冲突，但 macOS/Windows 上通配与回环可共存，
+// 因此不能用回环地址模拟占用，否则这些平台会误判端口空闲。
 func occupyPort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("占用临时端口失败: %v", err)
 	}
